@@ -50,8 +50,23 @@ public class WikiGen {
         }
         write("quirks/index.html", quirkIndex(quirkRows));
         urls.add("quirks/");
-        write("characters.html", charactersPage(npcs, trees));
+        write("characters.html", charactersPage(npcs));
         urls.add("characters.html");
+        Path res = mod.resolve("src/main/resources/assets/mhc");
+        for (Npc n : npcs) {
+            write("characters/" + n.id() + ".html", charPage(n, trees));
+            urls.add("characters/" + n.id() + ".html");
+            for (Part p : n.parts()) {
+                for (String f : List.of(p.geo(), p.tex())) {
+                    Path src = res.resolve(f), dst = out.resolve("assets").resolve(f);
+                    if (Files.exists(src)) {
+                        Files.createDirectories(dst.getParent());
+                        Files.copy(src, dst, StandardCopyOption.REPLACE_EXISTING);
+                    }
+                }
+            }
+        }
+        write("viewer.js", VIEWER);
         write("guide.html", guidePage());
         urls.add("guide.html");
         write("index.html", homePage(quirkRows.size(), npcs.size()));
@@ -430,13 +445,95 @@ public class WikiGen {
 
     // ------------------------------------------------------------------ NPC
 
-    record Npc(String id, String name, String group, int[] stats, List<String> quirks, int level) {}
+    /** 3Dで描く部品: モデル(geo)・テクスチャ・隠す骨(防具で着ていない部位)。 */
+    record Part(String geo, String tex, List<String> hide) {}
+
+    record Npc(String id, String name, String group, int[] stats, List<String> quirks, int level, List<Part> parts) {
+        Npc(String id, String name, String group, int[] stats, List<String> quirks, int level) { this(id, name, group, stats, quirks, level, new ArrayList<>()); }
+    }
+
+    static Map<String, String> parentOf = new HashMap<>();
+    static Map<String, Path> classFile = new HashMap<>();
+
+    static List<String> ancestors(String c) {
+        List<String> l = new ArrayList<>();
+        for (int i = 0; c != null && i < 20; i++, c = parentOf.get(c)) l.add(c);
+        return l;
+    }
+
+    /** if (object instanceof A || object instanceof B) return rl("x") の並びを読む。最後の要素は {"", 既定のパス}。 */
+    static List<String[]> chain(String body) {
+        List<String[]> r = new ArrayList<>();
+        Matcher m = Pattern.compile("if\\s*\\(([^{};]*?)\\)\\s*\\{?\\s*return\\s+(?:rl\\(|new ResourceLocation\\(\\s*MyHeroCraftMod\\.ID\\s*,\\s*)\"([^\"]+)\"").matcher(body);
+        while (m.find()) {
+            List<String> cs = new ArrayList<>();
+            Matcher c = Pattern.compile("instanceof\\s+(\\w+)").matcher(m.group(1));
+            while (c.find()) cs.add(c.group(1));
+            if (!cs.isEmpty()) r.add(new String[]{String.join(",", cs), m.group(2)});
+        }
+        Matcher d = Pattern.compile("return\\s+(?:rl\\(|new ResourceLocation\\(\\s*MyHeroCraftMod\\.ID\\s*,\\s*)\"([^\"]+)\"\\s*\\)\\s*;\\s*$").matcher(body.trim());
+        if (d.find()) r.add(new String[]{"", d.group(1)});
+        return r;
+    }
+
+    static String resolve(List<String[]> chain, String cls) {
+        List<String> anc = ancestors(cls);
+        for (String[] e : chain) {
+            if (e[0].isEmpty()) return e[1];
+            for (String c : e[0].split(",")) if (anc.contains(c)) return e[1];
+        }
+        return null;
+    }
+
+    static Map<String, List<String[]>[]> modelChains = new HashMap<>();
+
+    /** コスチュームの item クラス → 使っている Renderer → Model を読んで、{geo, texture} を返す。分からなければ null。 */
+    @SuppressWarnings("unchecked")
+    static String[] armorModel(String itemCls) throws Exception {
+        for (String c : ancestors(itemCls)) {
+            Path f = classFile.get(c);
+            if (f == null) return null;
+            Matcher r = Pattern.compile("new\\s+(\\w*Renderer)\\s*\\(").matcher(strip(read(f)));
+            if (!r.find() || !classFile.containsKey(r.group(1))) continue;
+            Matcher mm = Pattern.compile("super\\(\\s*new\\s+(\\w+)\\s*(?:<[^>]*>)?\\s*\\(").matcher(strip(read(classFile.get(r.group(1)))));
+            if (!mm.find() || !classFile.containsKey(mm.group(1))) return null;
+            List<String[]>[] ch = modelChains.get(mm.group(1));
+            if (ch == null) {
+                String ms = strip(read(classFile.get(mm.group(1))));
+                ch = new List[]{chain(method(ms, "public ResourceLocation getModelResource\\(\\w+ \\w+\\)\\s*\\{")),
+                        chain(method(ms, "public ResourceLocation getTextureResource\\(\\w+ \\w+\\)\\s*\\{"))};
+                modelChains.put(mm.group(1), ch);
+            }
+            String g = resolve(ch[0], itemCls), t = resolve(ch[1], itemCls);
+            return g != null && t != null ? new String[]{g, t} : null;
+        }
+        return null;
+    }
 
     static List<Npc> npcs(Path java) throws Exception {
         String reg = strip(read(java.resolve("entity/ModEntityType.java")));
         Map<String, String> classToId = new HashMap<>();
         Matcher m = Pattern.compile("register\\(\"([a-z0-9_]+)\",\\s*EntityType\\.Builder\\.(?:<\\w+>)?of\\((\\w+)::new").matcher(reg);
         while (m.find()) classToId.putIfAbsent(m.group(2), m.group(1));
+        try (Stream<Path> w = Files.walk(java)) {
+            for (Path f : w.filter(p -> p.toString().endsWith(".java")).toList()) {
+                String cls = f.getFileName().toString().replace(".java", "");
+                classFile.put(cls, f);
+                Matcher e = Pattern.compile("class\\s+" + cls + "(?:<[^>{]*>)?\\s+extends\\s+(\\w+)").matcher(read(f));
+                if (e.find()) parentOf.put(cls, e.group(1));
+            }
+        }
+        // 体(NPCのモデル)と、着ているコスチュームのモデル・テクスチャ
+        String hero = strip(read(java.resolve("entity/Hero/Pro/client/Pro_HeroModel.java")));
+        List<String[]> bodyGeo = chain(method(hero, "public ResourceLocation getModelResource\\(T object\\)\\s*\\{"));
+        List<String[]> bodyTex = chain(method(hero, "private ResourceLocation textureResource\\(T object\\)\\s*\\{"));
+        String cm = strip(read(java.resolve("Item/armor/client/Costume/Costume_Model.java")));
+        List<String[]> armorGeo = chain(method(cm, "public ResourceLocation getModelResource\\(T object\\)\\s*\\{"));
+        List<String[]> armorTex = chain(method(cm, "public ResourceLocation getTextureResource\\(T object\\)\\s*\\{"));
+        Map<String, String> itemClass = new HashMap<>();
+        Matcher ic = Pattern.compile("RegistryObject<(\\w+)>\\s+(\\w+)\\s*=\\s*ITEMS\\.register").matcher(strip(read(java.resolve("Item/ModItemsClothes.java"))));
+        while (ic.find()) itemClass.put(ic.group(2), ic.group(1));
+
         List<Npc> list = new ArrayList<>();
         List<Path> files;
         try (Stream<Path> w = Files.walk(java.resolve("entity"))) { files = w.filter(p -> p.toString().endsWith(".java")).toList(); }
@@ -445,6 +542,39 @@ public class WikiGen {
             String id = classToId.get(cls);
             if (id == null) continue;
             String src = strip(read(f));
+            List<Part> parts = new ArrayList<>();
+            String g = resolve(bodyGeo, cls), t = resolve(bodyTex, cls);
+            if (g != null && t != null) parts.add(new Part(g, t, List.of()));
+            // コスチューム(自分のクラスに無ければ親のクラス)
+            Map<String, String> slots = new LinkedHashMap<>();
+            for (String c : ancestors(cls)) {
+                if (!classFile.containsKey(c)) break;
+                Matcher sl = Pattern.compile("setItemSlot\\(EquipmentSlot\\.(HEAD|CHEST|LEGS|FEET)\\s*,\\s*new ItemStack\\(ModItemsClothes\\.(\\w+)\\.get\\(\\)\\)\\)").matcher(strip(read(classFile.get(c))));
+                while (sl.find()) slots.putIfAbsent(sl.group(1), sl.group(2));
+                if (!slots.isEmpty()) break;
+            }
+            Map<String, List<String>> bySet = new LinkedHashMap<>(); // geo|tex → 着ている部位
+            for (var s : slots.entrySet()) {
+                String ac = itemClass.get(s.getValue());
+                if (ac == null) continue;
+                String[] mt = armorModel(ac);
+                String ag = mt != null ? mt[0] : resolve(armorGeo, ac), at = mt != null ? mt[1] : resolve(armorTex, ac);
+                if (ag == null || at == null) continue;
+                bySet.computeIfAbsent(ag + "|" + at, k -> new ArrayList<>()).add(s.getKey());
+            }
+            for (var e : bySet.entrySet()) {
+                List<String> hide = new ArrayList<>(List.of("armorHead", "armorBody", "armorRightArm", "armorLeftArm", "armorRightLeg", "armorLeftLeg", "armorRightBoot", "armorLeftBoot"));
+                for (String slot : e.getValue()) {
+                    switch (slot) {
+                        case "HEAD" -> hide.remove("armorHead");
+                        case "CHEST" -> hide.removeAll(List.of("armorBody", "armorRightArm", "armorLeftArm"));
+                        case "LEGS" -> hide.removeAll(List.of("armorRightLeg", "armorLeftLeg"));
+                        case "FEET" -> hide.removeAll(List.of("armorRightBoot", "armorLeftBoot"));
+                    }
+                }
+                String[] gt = e.getKey().split("\\|");
+                parts.add(new Part(gt[0], gt[1], hide));
+            }
             String rel = java.resolve("entity").relativize(f).toString().replace('\\', '/');
             String group = rel.startsWith("Hero/Student") ? "U.A. Students" : rel.startsWith("Hero") ? "Heroes"
                     : rel.startsWith("Villan") ? "Villains" : null;
@@ -457,11 +587,11 @@ public class WikiGen {
                 List<String> q = new ArrayList<>();
                 Matcher n = Pattern.compile("\"([a-z0-9_]+)\"").matcher(s.group(6));
                 while (n.find()) q.add(n.group(1));
-                list.add(new Npc(id, name, group, new int[]{num(s.group(1)), num(s.group(2)), num(s.group(3)), num(s.group(4)), num(s.group(5))}, q, 0));
+                list.add(new Npc(id, name, group, new int[]{num(s.group(1)), num(s.group(2)), num(s.group(3)), num(s.group(4)), num(s.group(5))}, q, 0, parts));
             } else if (l.find()) {
-                list.add(new Npc(id, name, group, null, List.of(l.group(1)), num(l.group(2))));
+                list.add(new Npc(id, name, group, null, List.of(l.group(1)), num(l.group(2)), parts));
             } else if (cls.equals("Villan_Mob")) {
-                list.add(new Npc(id, name, group, null, List.of("random"), 0));
+                list.add(new Npc(id, name, group, null, List.of("random"), 0, parts));
             }
         }
         list.sort(Comparator.comparing(Npc::group).thenComparing(Npc::name));
@@ -569,7 +699,7 @@ public class WikiGen {
         List<Npc> users = npcs.stream().filter(n -> n.quirks().contains(q)).toList();
         if (!users.isEmpty()) {
             b.append("<h2>Characters with this quirk</h2><ul class=\"inline\">");
-            for (Npc n : users) b.append("<li><a href=\"../characters.html#").append(n.id()).append("\">").append(esc(n.name())).append("</a></li>");
+            for (Npc n : users) b.append("<li><a href=\"../characters/").append(n.id()).append(".html\">").append(esc(label(n))).append("</a></li>");
             b.append("</ul>");
         }
         String meta = k.name + " is a quirk in the My Hero Craft Minecraft mod" + (k.users.isEmpty() ? "" : " (used by " + k.users + ")") + ". "
@@ -596,26 +726,102 @@ public class WikiGen {
         return p != null ? noFormat(p[0]) : titleCase(id);
     }
 
-    static String charactersPage(List<Npc> npcs, Map<String, Tree> trees) {
+    /** 同じ名前の別バージョン(student_midoriya_2 など)は番号を付けて見分ける。 */
+    static String label(Npc n) {
+        Matcher m = Pattern.compile("_(\\d+)$").matcher(n.id());
+        return m.find() ? n.name() + " (" + m.group(1) + ")" : n.name();
+    }
+
+    static String charactersPage(List<Npc> npcs) {
         StringBuilder b = new StringBuilder("<h1>Characters</h1><p class=\"lead\">Characters from My Hero Academia that appear in My Hero Craft. "
-                + "Stats are Health, Strength, Dexterity, Defense and Quirk level.</p>");
+                + "Click a character to see their model, quirk and stats.</p>");
         String grp = null;
         for (Npc n : npcs) {
             if (!n.group().equals(grp)) {
-                if (grp != null) b.append("</tbody></table></div>");
+                if (grp != null) b.append("</div>");
                 grp = n.group();
-                b.append("<h2>").append(esc(grp)).append("</h2><div class=\"table\"><table><thead><tr><th>Name</th><th>Quirk</th><th>HP</th><th>STR</th><th>DEX</th><th>DEF</th><th>Quirk Lv</th></tr></thead><tbody>");
+                b.append("<h2>").append(esc(grp)).append("</h2><div class=\"names\">");
             }
-            String quirks = n.quirks().stream().map(q -> q.equals("random") ? "Random" : trees.containsKey(q)
-                    ? "<a href=\"quirks/" + q + ".html\">" + esc(kosei(q).name()) + "</a>" : esc(kosei(q).name())).collect(Collectors.joining(", "));
-            b.append("<tr id=\"").append(n.id()).append("\"><td><strong>").append(esc(n.name())).append("</strong></td><td>").append(quirks).append("</td>");
-            if (n.stats() != null) for (int s : n.stats()) b.append("<td>").append(s).append("</td>");
-            else if (n.quirks().contains("random")) b.append("<td colspan=\"5\">Random (0–4 each)</td>");
-            else b.append("<td colspan=\"5\">Level ").append(n.level()).append("</td>");
-            b.append("</tr>");
+            b.append("<a href=\"characters/").append(n.id()).append(".html\">").append(esc(label(n))).append("</a>");
         }
-        if (grp != null) b.append("</tbody></table></div>");
-        return layout("Characters", "Heroes, U.A. students and villains in the My Hero Craft Minecraft mod, with their quirks and stats.", "characters.html", b.toString(), 0);
+        if (grp != null) b.append("</div>");
+        return layout("Characters", "Heroes, U.A. students and villains in the My Hero Craft Minecraft mod.", "characters.html", b.toString(), 0);
+    }
+
+    static String charPage(Npc n, Map<String, Tree> trees) {
+        StringBuilder b = new StringBuilder();
+        b.append("<p class=\"crumb\"><a href=\"../characters.html\">Characters</a> / ").append(esc(n.group())).append("</p>");
+        b.append("<h1>").append(esc(label(n))).append("</h1>");
+        String quirks = n.quirks().stream().map(q -> q.equals("random") ? "Random (any quirk)" : trees.containsKey(q)
+                ? "<a href=\"../quirks/" + q + ".html\">" + esc(kosei(q).name()) + "</a>" : esc(kosei(q).name())).collect(Collectors.joining(", "));
+        b.append("<p class=\"lead\">Quirk: ").append(quirks).append("</p>");
+        b.append("<div class=\"char\">");
+        // 3D モデル
+        b.append("<div class=\"panel\"><h2>Model</h2>");
+        if (!n.parts().isEmpty()) {
+            StringBuilder json = new StringBuilder("[");
+            for (int i = 0; i < n.parts().size(); i++) {
+                Part p = n.parts().get(i);
+                json.append(i > 0 ? "," : "").append("{\"geo\":\"../assets/").append(p.geo()).append("\",\"tex\":\"../assets/").append(p.tex())
+                        .append("\",\"hide\":[").append(p.hide().stream().map(h -> "\"" + h + "\"").collect(Collectors.joining(","))).append("]}");
+            }
+            b.append("<div id=\"viewer\" class=\"viewer\" aria-label=\"3D model of ").append(esc(n.name())).append("\"></div>")
+                    .append("<p class=\"note\">Drag to rotate, scroll to zoom.</p>")
+                    .append("<script id=\"model-data\" type=\"application/json\">").append(json).append("]</script>");
+        } else {
+            b.append("<p class=\"note\">No model data.</p>");
+        }
+        b.append("</div>");
+        // ステータス
+        b.append("<div class=\"panel\"><h2>Stats</h2>");
+        String[] labels = {"Health", "Strength", "Dexterity", "Defense", "Quirk"};
+        if (n.stats() != null) {
+            b.append(radar(n.stats(), labels));
+            b.append("<div class=\"bars\">");
+            for (int i = 0; i < 5; i++) {
+                int v = n.stats()[i];
+                b.append("<div class=\"bar\"><span>").append(labels[i]).append("</span><div><i style=\"width:").append(Math.min(100, v * 5)).append("%\"></i></div><b>").append(v).append("</b></div>");
+            }
+            b.append("</div><p class=\"note\">Each stat goes up to 20. Defeating this character alone gives about ")
+                    .append(Math.max(1, Math.round(Arrays.stream(n.stats()).sum() / 4.0))).append(" skill points.</p>");
+        } else if (n.quirks().contains("random")) {
+            b.append("<p>Each stat is random from 0 to 4. Gives about 2–3 skill points (up to 5).</p>");
+        } else {
+            b.append("<p>Quirk level ").append(n.level()).append(".</p>");
+        }
+        b.append("</div></div>");
+        if (!n.parts().isEmpty()) {
+            b.append("<script type=\"importmap\">{\"imports\":{\"three\":\"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js\","
+                    + "\"three/addons/\":\"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/\"}}</script>")
+                    .append("<script type=\"module\" src=\"../viewer.js\"></script>");
+        }
+        return layout(label(n) + " (Character)", n.name() + " in the My Hero Craft Minecraft mod: quirk, stats and 3D model.",
+                "characters/" + n.id() + ".html", b.toString(), 1);
+    }
+
+    /** 5つのステータスのレーダーチャート(SVG)。最大20。 */
+    static String radar(int[] v, String[] labels) {
+        double cx = 150, cy = 140, r = 100;
+        StringBuilder s = new StringBuilder("<svg class=\"radar\" viewBox=\"0 0 300 290\" role=\"img\" aria-label=\"Stats chart\">");
+        for (int ring = 1; ring <= 4; ring++) {
+            StringBuilder pts = new StringBuilder();
+            for (int i = 0; i < 5; i++) {
+                double a = -Math.PI / 2 + i * 2 * Math.PI / 5, rr = r * ring / 4;
+                pts.append(String.format(Locale.ROOT, "%.1f,%.1f ", cx + rr * Math.cos(a), cy + rr * Math.sin(a)));
+            }
+            s.append("<polygon class=\"ring\" points=\"").append(pts).append("\"/>");
+        }
+        StringBuilder val = new StringBuilder();
+        for (int i = 0; i < 5; i++) {
+            double a = -Math.PI / 2 + i * 2 * Math.PI / 5;
+            s.append(String.format(Locale.ROOT, "<line class=\"axis\" x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\"/>", cx, cy, cx + r * Math.cos(a), cy + r * Math.sin(a)));
+            double rr = r * Math.min(20, v[i]) / 20.0;
+            val.append(String.format(Locale.ROOT, "%.1f,%.1f ", cx + rr * Math.cos(a), cy + rr * Math.sin(a)));
+            double lx = cx + (r + 22) * Math.cos(a), ly = cy + (r + 18) * Math.sin(a);
+            s.append(String.format(Locale.ROOT, "<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\">%s %d</text>", lx, ly + 4, labels[i], v[i]));
+        }
+        s.append("<polygon class=\"val\" points=\"").append(val).append("\"/></svg>");
+        return s.toString();
     }
 
     static String guidePage() {
@@ -628,7 +834,6 @@ public class WikiGen {
                 + row("C (Hero Mode)", "Blink in the direction you are moving. 10 second cooldown, shown above the hunger bar.")
                 + row("N", "Open the Quirk Note (skill tree).")
                 + row("K", "Open the status screen to spend status points.")
-                + row("X / Z", "Use support items (torso / legs). Hold Shift for head / feet.")
                 + row("Shift twice", "Triggers some passives (for example climbing). Only works while a skill of that quirk is selected.")
                 + "</tbody></table></div><p class=\"note\">All keys can be changed in Options → Controls → Key Binds.</p>"
                 + "<h2 id=\"modes\">Hero and Villain worlds</h2><p>Each player is either on the hero side or the villain side, decided the first time they join a world "
@@ -669,6 +874,111 @@ public class WikiGen {
             });
             """;
 
+    /** Bedrock(GeckoLib)のモデルを three.js で描く。体とコスチュームを重ねる。 */
+    static final String VIEWER = """
+            import * as THREE from 'three';
+            import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+            const el = document.getElementById('viewer');
+            const parts = JSON.parse(document.getElementById('model-data').textContent);
+            const D = Math.PI / 180;
+            const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
+            el.appendChild(renderer.domElement);
+            const scene = new THREE.Scene();
+            const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 1000);
+            camera.position.set(-30, 22, -92);
+            const controls = new OrbitControls(camera, renderer.domElement);
+            controls.target.set(0, 16, 0);
+            controls.enablePan = false;
+            controls.minDistance = 20;
+            controls.maxDistance = 140;
+            controls.autoRotate = true;
+            controls.autoRotateSpeed = 1.2;
+            controls.addEventListener('start', () => { controls.autoRotate = false; });
+            const loader = new THREE.TextureLoader();
+
+            function rect(u0, v0, u1, v1, flipU, flipV) { return flipU ? (flipV ? [u1, v1, u0, v0] : [u1, v0, u0, v1]) : (flipV ? [u0, v1, u1, v0] : [u0, v0, u1, v1]); }
+
+            function faceRects(c) {
+              const [w, h, d] = c.size;
+              if (Array.isArray(c.uv) || !c.uv) {
+                const [u, v] = c.uv || [0, 0];
+                let east = rect(u, v + d, u + d, v + d + h), west = rect(u + d + w, v + d, u + 2 * d + w, v + d + h);
+                const north = rect(u + d, v + d, u + d + w, v + d + h), south = rect(u + 2 * d + w, v + d, u + 2 * d + 2 * w, v + d + h);
+                const up = rect(u + d, v, u + d + w, v + d, true, true), down = rect(u + d + w, v, u + d + 2 * w, v + d, true, false);
+                let r = [east, west, up, down, south, north];
+                if (c.mirror) { r = [west, east, up, down, south, north].map(q => [q[2], q[1], q[0], q[3]]); }
+                return r;
+              }
+              const f = n => { const o = c.uv[n]; if (!o) return null; const [u, v] = o.uv, [sw, sh] = o.uv_size || [0, 0]; return [u, v, u + sw, v + sh]; };
+              const up = f('up'), down = f('down');
+              return [f('east'), f('west'), up && [up[2], up[3], up[0], up[1]], down && [down[2], down[1], down[0], down[3]], f('south'), f('north')];
+            }
+
+            function cubeMesh(c, mat, tw, th) {
+              const inf = c.inflate || 0, [w, h, d] = c.size;
+              const geo = new THREE.BoxGeometry(Math.max(w + inf * 2, 0.001), Math.max(h + inf * 2, 0.001), Math.max(d + inf * 2, 0.001));
+              const uv = geo.attributes.uv, rs = faceRects(c);
+              const hidden = [];
+              rs.forEach((r, i) => {
+                if (!r) { hidden.push(i); return; }
+                const [u0, v0, u1, v1] = r;
+                uv.setXY(i * 4 + 0, u0 / tw, 1 - v0 / th); uv.setXY(i * 4 + 1, u1 / tw, 1 - v0 / th);
+                uv.setXY(i * 4 + 2, u0 / tw, 1 - v1 / th); uv.setXY(i * 4 + 3, u1 / tw, 1 - v1 / th);
+              });
+              if (hidden.length) { const idx = geo.index.array; hidden.forEach(i => { for (let k = 0; k < 6; k++) idx[i * 6 + k] = 0; }); }
+              return new THREE.Mesh(geo, mat);
+            }
+
+            function build(json, tex, hide) {
+              const g = (json['minecraft:geometry'] || [])[0];
+              if (!g) return null;
+              const tw = g.description.texture_width, th = g.description.texture_height;
+              const mat = new THREE.MeshBasicMaterial({ map: tex, alphaTest: 0.1, side: THREE.DoubleSide });
+              const root = new THREE.Group(), bones = {};
+              for (const b of g.bones || []) bones[b.name] = { b, grp: new THREE.Group() };
+              const pv = b => { const p = b.pivot || [0, 0, 0]; return [-p[0], p[1], p[2]]; };
+              for (const { b, grp } of Object.values(bones)) {
+                const p = pv(b), parent = b.parent && bones[b.parent];
+                const pp = parent ? pv(parent.b) : [0, 0, 0];
+                grp.position.set(p[0] - pp[0], p[1] - pp[1], p[2] - pp[2]);
+                const r = b.rotation || [0, 0, 0];
+                grp.rotation.set(-r[0] * D, -r[1] * D, r[2] * D, 'ZYX');
+                (parent ? parent.grp : root).add(grp);
+                if (hide.includes(b.name)) grp.visible = false;
+                for (const c of b.cubes || []) {
+                  const [ox, oy, oz] = c.origin, [w, h, d] = c.size;
+                  const center = [-(ox + w / 2), oy + h / 2, oz + d / 2];
+                  const mesh = cubeMesh(c, mat, tw, th);
+                  if (c.rotation) {
+                    const cp = c.pivot ? [-c.pivot[0], c.pivot[1], c.pivot[2]] : center;
+                    const holder = new THREE.Group();
+                    holder.position.set(cp[0] - p[0], cp[1] - p[1], cp[2] - p[2]);
+                    holder.rotation.set(-c.rotation[0] * D, -c.rotation[1] * D, c.rotation[2] * D, 'ZYX');
+                    mesh.position.set(center[0] - cp[0], center[1] - cp[1], center[2] - cp[2]);
+                    holder.add(mesh); grp.add(holder);
+                  } else {
+                    mesh.position.set(center[0] - p[0], center[1] - p[1], center[2] - p[2]);
+                    grp.add(mesh);
+                  }
+                }
+              }
+              return root;
+            }
+
+            for (const p of parts) {
+              try {
+                const [json, tex] = await Promise.all([fetch(p.geo).then(r => r.json()), loader.loadAsync(p.tex)]);
+                tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter; tex.colorSpace = THREE.SRGBColorSpace;
+                const m = build(json, tex, p.hide || []);
+                if (m) scene.add(m);
+              } catch (e) { console.warn('model part failed', p, e); }
+            }
+            function resize() { const w = el.clientWidth, h = el.clientHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); }
+            new ResizeObserver(resize).observe(el); resize();
+            renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+            """;
+
     static final String CSS = """
             :root{--bg:#f7f8fb;--panel:#fff;--ink:#14171f;--muted:#5b6475;--line:#e3e6ee;--accent:#1f7a52;--accent2:#e8b21a;--chal:#b4234a}
             @media (prefers-color-scheme:dark){:root{--bg:#10131a;--panel:#171b24;--ink:#e8ebf2;--muted:#9aa3b5;--line:#272d3a;--accent:#4cc58c;--accent2:#f1c24a;--chal:#ef6d8f}}
@@ -701,6 +1011,18 @@ public class WikiGen {
             .formula{padding:12px 16px;background:var(--panel);border:1px solid var(--line);border-radius:10px;font-weight:600}
             kbd,code{font-family:ui-monospace,Consolas,monospace;font-size:14px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:1px 6px}
             footer{color:var(--muted);font-size:14px;padding:24px 16px 40px;border-top:1px solid var(--line)}
+            .names{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+            .names a{display:block;padding:10px 14px;background:var(--panel);border:1px solid var(--line);border-radius:10px;text-decoration:none;color:var(--ink);font-weight:600}
+            .names a:hover{border-color:var(--accent);color:var(--accent)}
+            .char{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start}
+            .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}.panel h2{margin:0 0 8px;font-size:18px}
+            .viewer{width:100%;aspect-ratio:3/4;max-height:560px;border-radius:10px;background:radial-gradient(circle at 50% 40%,color-mix(in srgb,var(--accent) 14%,transparent),transparent 70%)}
+            .viewer canvas{width:100%;height:100%;display:block;cursor:grab}
+            .radar{width:100%;max-width:340px;display:block;margin:0 auto}.radar .ring{fill:none;stroke:var(--line)}.radar .axis{stroke:var(--line)}
+            .radar .val{fill:color-mix(in srgb,var(--accent) 30%,transparent);stroke:var(--accent);stroke-width:2}.radar text{fill:var(--muted);font-size:12px}
+            .bars{display:grid;gap:6px;margin-top:8px}.bar{display:grid;grid-template-columns:80px 1fr 28px;align-items:center;gap:8px;font-size:14px}
+            .bar div{height:8px;border-radius:999px;background:var(--line);overflow:hidden}.bar i{display:block;height:100%;background:var(--accent)}.bar b{text-align:right}
+            @media (max-width:760px){.char{grid-template-columns:1fr}.names{grid-template-columns:repeat(2,minmax(0,1fr))}}
             @media (max-width:600px){h1{font-size:26px}nav a{margin-left:12px}}
             """;
 }
