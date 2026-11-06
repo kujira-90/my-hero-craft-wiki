@@ -767,7 +767,8 @@ public class WikiGen {
             }
             b.append("<div id=\"viewer\" class=\"viewer\" aria-label=\"3D model of ").append(esc(n.name())).append("\"></div>")
                     .append("<p class=\"note\">Drag to rotate, scroll to zoom.</p>")
-                    .append("<script id=\"model-data\" type=\"application/json\">").append(json).append("]</script>");
+                    .append("<script id=\"model-data\" type=\"application/json\">").append(json).append("]</script>")
+                    .append("<script>if(location.protocol==='file:'){document.getElementById('viewer').innerHTML='<p class=\"note\" style=\"padding:16px\">The 3D model cannot load from a file on your PC. Open the wiki with preview.bat or on the website.</p>';}</script>");
         } else {
             b.append("<p class=\"note\">No model data.</p>");
         }
