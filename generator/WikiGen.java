@@ -487,6 +487,31 @@ public class WikiGen {
 
     static Map<String, List<String[]>[]> modelChains = new HashMap<>();
 
+    /** Renderer のクラスから Model を探し、target のクラスで {geo, texture} を決める。 */
+    @SuppressWarnings("unchecked")
+    static String[] fromRenderer(String renderer, String target) throws Exception {
+        Path rf = classFile.get(renderer);
+        if (rf == null) return null;
+        Matcher mm = Pattern.compile("new\\s+(\\w+)\\s*(?:<[^>]*>)?\\s*\\(").matcher(strip(read(rf)));
+        while (mm.find()) {
+            String model = mm.group(1);
+            Path mf = classFile.get(model);
+            if (mf == null) continue;
+            String ms = strip(read(mf));
+            if (!ms.contains("getModelResource")) continue;
+            List<String[]>[] ch = modelChains.get(model);
+            if (ch == null) {
+                String texBody = method(ms, "public ResourceLocation getTextureResource\\(\\w+ \\w+\\)\\s*\\{");
+                if (texBody.contains("textureResource(")) texBody = method(ms, "ResourceLocation textureResource\\(\\w+ \\w+\\)\\s*\\{");
+                ch = new List[]{chain(method(ms, "public ResourceLocation getModelResource\\(\\w+ \\w+\\)\\s*\\{")), chain(texBody)};
+                modelChains.put(model, ch);
+            }
+            String g = resolve(ch[0], target), t = resolve(ch[1], target);
+            return g != null && t != null ? new String[]{g, t} : null;
+        }
+        return null;
+    }
+
     /** コスチュームの item クラス → 使っている Renderer → Model を読んで、{geo, texture} を返す。分からなければ null。 */
     @SuppressWarnings("unchecked")
     static String[] armorModel(String itemCls) throws Exception {
@@ -495,17 +520,7 @@ public class WikiGen {
             if (f == null) return null;
             Matcher r = Pattern.compile("new\\s+(\\w*Renderer)\\s*\\(").matcher(strip(read(f)));
             if (!r.find() || !classFile.containsKey(r.group(1))) continue;
-            Matcher mm = Pattern.compile("super\\(\\s*new\\s+(\\w+)\\s*(?:<[^>]*>)?\\s*\\(").matcher(strip(read(classFile.get(r.group(1)))));
-            if (!mm.find() || !classFile.containsKey(mm.group(1))) return null;
-            List<String[]>[] ch = modelChains.get(mm.group(1));
-            if (ch == null) {
-                String ms = strip(read(classFile.get(mm.group(1))));
-                ch = new List[]{chain(method(ms, "public ResourceLocation getModelResource\\(\\w+ \\w+\\)\\s*\\{")),
-                        chain(method(ms, "public ResourceLocation getTextureResource\\(\\w+ \\w+\\)\\s*\\{"))};
-                modelChains.put(mm.group(1), ch);
-            }
-            String g = resolve(ch[0], itemCls), t = resolve(ch[1], itemCls);
-            return g != null && t != null ? new String[]{g, t} : null;
+            return fromRenderer(r.group(1), itemCls);
         }
         return null;
     }
@@ -515,6 +530,12 @@ public class WikiGen {
         Map<String, String> classToId = new HashMap<>();
         Matcher m = Pattern.compile("register\\(\"([a-z0-9_]+)\",\\s*EntityType\\.Builder\\.(?:<\\w+>)?of\\((\\w+)::new").matcher(reg);
         while (m.find()) classToId.putIfAbsent(m.group(2), m.group(1));
+        // エンティティのクラス → 描く Renderer(ModEntityType の registerEntityRenderer)
+        Map<String, String> fieldToClass = new HashMap<>(), classToRenderer = new HashMap<>();
+        m = Pattern.compile("RegistryObject<EntityType<(\\w+)>>\\s+(\\w+)\\s*=").matcher(reg);
+        while (m.find()) fieldToClass.put(m.group(2), m.group(1));
+        m = Pattern.compile("registerEntityRenderer\\(\\s*ModEntityType\\.(\\w+)\\.get\\(\\)\\s*,\\s*(\\w+)::new").matcher(reg);
+        while (m.find()) if (fieldToClass.containsKey(m.group(1))) classToRenderer.put(fieldToClass.get(m.group(1)), m.group(2));
         try (Stream<Path> w = Files.walk(java)) {
             for (Path f : w.filter(p -> p.toString().endsWith(".java")).toList()) {
                 String cls = f.getFileName().toString().replace(".java", "");
@@ -543,7 +564,8 @@ public class WikiGen {
             if (id == null) continue;
             String src = strip(read(f));
             List<Part> parts = new ArrayList<>();
-            String g = resolve(bodyGeo, cls), t = resolve(bodyTex, cls);
+            String[] body = classToRenderer.containsKey(cls) ? fromRenderer(classToRenderer.get(cls), cls) : null;
+            String g = body != null ? body[0] : resolve(bodyGeo, cls), t = body != null ? body[1] : resolve(bodyTex, cls);
             if (g != null && t != null) parts.add(new Part(g, t, List.of()));
             // コスチューム(自分のクラスに無ければ親のクラス)
             Map<String, String> slots = new LinkedHashMap<>();
@@ -916,7 +938,7 @@ public class WikiGen {
               return [f('east'), f('west'), up && [up[2], up[3], up[0], up[1]], down && [down[2], down[1], down[0], down[3]], f('south'), f('north')];
             }
 
-            function cubeMesh(c, mat, tw, th) {
+            function cubeMesh(c, mat, tw, th, sv, order) {
               const inf = c.inflate || 0, [w, h, d] = c.size;
               const geo = new THREE.BoxGeometry(Math.max(w + inf * 2, 0.001), Math.max(h + inf * 2, 0.001), Math.max(d + inf * 2, 0.001));
               const uv = geo.attributes.uv, rs = faceRects(c);
@@ -924,18 +946,19 @@ public class WikiGen {
               rs.forEach((r, i) => {
                 if (!r) { hidden.push(i); return; }
                 const [u0, v0, u1, v1] = r;
-                uv.setXY(i * 4 + 0, u0 / tw, 1 - v0 / th); uv.setXY(i * 4 + 1, u1 / tw, 1 - v0 / th);
-                uv.setXY(i * 4 + 2, u0 / tw, 1 - v1 / th); uv.setXY(i * 4 + 3, u1 / tw, 1 - v1 / th);
+                uv.setXY(i * 4 + 0, u0 / tw, 1 - v0 / th * sv); uv.setXY(i * 4 + 1, u1 / tw, 1 - v0 / th * sv);
+                uv.setXY(i * 4 + 2, u0 / tw, 1 - v1 / th * sv); uv.setXY(i * 4 + 3, u1 / tw, 1 - v1 / th * sv);
               });
               if (hidden.length) { const idx = geo.index.array; hidden.forEach(i => { for (let k = 0; k < 6; k++) idx[i * 6 + k] = 0; }); }
-              return new THREE.Mesh(geo, mat);
+              const mesh = new THREE.Mesh(geo, mat); mesh.renderOrder = order; return mesh;
             }
 
-            function build(json, tex, hide) {
+            function build(json, tex, hide, order) {
               const g = (json['minecraft:geometry'] || [])[0];
               if (!g) return null;
               const tw = g.description.texture_width, th = g.description.texture_height;
-              const mat = new THREE.MeshBasicMaterial({ map: tex, alphaTest: 0.1, side: THREE.DoubleSide });
+              const img = tex.image, sv = Math.min(1, (img.width * th / tw) / img.height); // 縦に並んだ動くテクスチャは最初の1コマだけ使う
+              const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.02, side: THREE.DoubleSide });
               const root = new THREE.Group(), bones = {};
               for (const b of g.bones || []) bones[b.name] = { b, grp: new THREE.Group() };
               const pv = b => { const p = b.pivot || [0, 0, 0]; return [-p[0], p[1], p[2]]; };
@@ -950,7 +973,7 @@ public class WikiGen {
                 for (const c of b.cubes || []) {
                   const [ox, oy, oz] = c.origin, [w, h, d] = c.size;
                   const center = [-(ox + w / 2), oy + h / 2, oz + d / 2];
-                  const mesh = cubeMesh(c, mat, tw, th);
+                  const mesh = cubeMesh(c, mat, tw, th, sv, order);
                   if (c.rotation) {
                     const cp = c.pivot ? [-c.pivot[0], c.pivot[1], c.pivot[2]] : center;
                     const holder = new THREE.Group();
@@ -971,9 +994,18 @@ public class WikiGen {
               try {
                 const [json, tex] = await Promise.all([fetch(p.geo).then(r => r.json()), loader.loadAsync(p.tex)]);
                 tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter; tex.colorSpace = THREE.SRGBColorSpace;
-                const m = build(json, tex, p.hide || []);
+                const m = build(json, tex, p.hide || [], parts.indexOf(p));
                 if (m) scene.add(m);
               } catch (e) { console.warn('model part failed', p, e); }
+            }
+            // モデルの大きさに合わせてカメラの距離と注視点を決める(オールマイトなど大きいモデルも全身が入る)
+            const box = new THREE.Box3().setFromObject(scene);
+            if (!box.isEmpty()) {
+              const c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3());
+              const dist = Math.max(s.y, s.x * 1.4) * 0.62 / Math.tan(camera.fov * D / 2);
+              controls.target.copy(c);
+              camera.position.copy(c).add(new THREE.Vector3(-0.32, 0.08, -1).normalize().multiplyScalar(dist));
+              controls.maxDistance = dist * 2.5; controls.minDistance = dist * 0.25;
             }
             function resize() { const w = el.clientWidth, h = el.clientHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); }
             new ResizeObserver(resize).observe(el); resize();

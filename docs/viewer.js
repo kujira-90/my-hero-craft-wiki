@@ -37,7 +37,7 @@ function faceRects(c) {
   return [f('east'), f('west'), up && [up[2], up[3], up[0], up[1]], down && [down[2], down[1], down[0], down[3]], f('south'), f('north')];
 }
 
-function cubeMesh(c, mat, tw, th) {
+function cubeMesh(c, mat, tw, th, sv, order) {
   const inf = c.inflate || 0, [w, h, d] = c.size;
   const geo = new THREE.BoxGeometry(Math.max(w + inf * 2, 0.001), Math.max(h + inf * 2, 0.001), Math.max(d + inf * 2, 0.001));
   const uv = geo.attributes.uv, rs = faceRects(c);
@@ -45,18 +45,19 @@ function cubeMesh(c, mat, tw, th) {
   rs.forEach((r, i) => {
     if (!r) { hidden.push(i); return; }
     const [u0, v0, u1, v1] = r;
-    uv.setXY(i * 4 + 0, u0 / tw, 1 - v0 / th); uv.setXY(i * 4 + 1, u1 / tw, 1 - v0 / th);
-    uv.setXY(i * 4 + 2, u0 / tw, 1 - v1 / th); uv.setXY(i * 4 + 3, u1 / tw, 1 - v1 / th);
+    uv.setXY(i * 4 + 0, u0 / tw, 1 - v0 / th * sv); uv.setXY(i * 4 + 1, u1 / tw, 1 - v0 / th * sv);
+    uv.setXY(i * 4 + 2, u0 / tw, 1 - v1 / th * sv); uv.setXY(i * 4 + 3, u1 / tw, 1 - v1 / th * sv);
   });
   if (hidden.length) { const idx = geo.index.array; hidden.forEach(i => { for (let k = 0; k < 6; k++) idx[i * 6 + k] = 0; }); }
-  return new THREE.Mesh(geo, mat);
+  const mesh = new THREE.Mesh(geo, mat); mesh.renderOrder = order; return mesh;
 }
 
-function build(json, tex, hide) {
+function build(json, tex, hide, order) {
   const g = (json['minecraft:geometry'] || [])[0];
   if (!g) return null;
   const tw = g.description.texture_width, th = g.description.texture_height;
-  const mat = new THREE.MeshBasicMaterial({ map: tex, alphaTest: 0.1, side: THREE.DoubleSide });
+  const img = tex.image, sv = Math.min(1, (img.width * th / tw) / img.height); // 縦に並んだ動くテクスチャは最初の1コマだけ使う
+  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.02, side: THREE.DoubleSide });
   const root = new THREE.Group(), bones = {};
   for (const b of g.bones || []) bones[b.name] = { b, grp: new THREE.Group() };
   const pv = b => { const p = b.pivot || [0, 0, 0]; return [-p[0], p[1], p[2]]; };
@@ -71,7 +72,7 @@ function build(json, tex, hide) {
     for (const c of b.cubes || []) {
       const [ox, oy, oz] = c.origin, [w, h, d] = c.size;
       const center = [-(ox + w / 2), oy + h / 2, oz + d / 2];
-      const mesh = cubeMesh(c, mat, tw, th);
+      const mesh = cubeMesh(c, mat, tw, th, sv, order);
       if (c.rotation) {
         const cp = c.pivot ? [-c.pivot[0], c.pivot[1], c.pivot[2]] : center;
         const holder = new THREE.Group();
@@ -92,9 +93,18 @@ for (const p of parts) {
   try {
     const [json, tex] = await Promise.all([fetch(p.geo).then(r => r.json()), loader.loadAsync(p.tex)]);
     tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter; tex.colorSpace = THREE.SRGBColorSpace;
-    const m = build(json, tex, p.hide || []);
+    const m = build(json, tex, p.hide || [], parts.indexOf(p));
     if (m) scene.add(m);
   } catch (e) { console.warn('model part failed', p, e); }
+}
+// モデルの大きさに合わせてカメラの距離と注視点を決める(オールマイトなど大きいモデルも全身が入る)
+const box = new THREE.Box3().setFromObject(scene);
+if (!box.isEmpty()) {
+  const c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3());
+  const dist = Math.max(s.y, s.x * 1.4) * 0.62 / Math.tan(camera.fov * D / 2);
+  controls.target.copy(c);
+  camera.position.copy(c).add(new THREE.Vector3(-0.32, 0.08, -1).normalize().multiplyScalar(dist));
+  controls.maxDistance = dist * 2.5; controls.minDistance = dist * 0.25;
 }
 function resize() { const w = el.clientWidth, h = el.clientHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); }
 new ResizeObserver(resize).observe(el); resize();
