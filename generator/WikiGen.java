@@ -58,6 +58,45 @@ public class WikiGen {
         }
         write("guide.html", guidePage());
         urls.add("guide.html");
+        // 店(発目・ランチラッシュ)・アイテム(サポートアイテム・コスチューム)・スマホ
+        String catalog = strip(read(java.resolve("Item/CostumeCatalog.java")));
+        String modItems = strip(read(java.resolve("Item/ModItems.java")));
+        String office = strip(read(java.resolve("office/OfficeData.java")));
+        List<String[]> support = new ArrayList<>(); // id, 値段
+        Matcher sm2 = Pattern.compile("new SupportItem\\(ModItems\\.(\\w+)\\s*,\\s*(\\d+)\\)").matcher(catalog);
+        while (sm2.find()) {
+            Matcher f = Pattern.compile(sm2.group(1) + "\\s*=\\s*ITEMS\\.register\\(\"([a-z0-9_]+)\"").matcher(modItems);
+            if (f.find()) support.add(new String[]{f.group(1), sm2.group(2)});
+        }
+        Map<String, Integer> slotCost = new LinkedHashMap<>();
+        Matcher sc = Pattern.compile("case (HELMET|CHESTPLATE|LEGGINGS|BOOTS) -> (\\d+);").matcher(catalog);
+        while (sc.find()) slotCost.put(sc.group(1), num(sc.group(2)));
+        List<String[]> costumes = new ArrayList<>(); // id, 部位
+        String clothes = strip(read(java.resolve("Item/ModItemsClothes.java")));
+        Matcher cr = Pattern.compile("ITEMS\\.register\\(\\s*\"((?:costume|ua)_[a-z0-9_]+)\"(.{0,400}?)ArmorItem\\.Type\\.(\\w+)", Pattern.DOTALL).matcher(clothes);
+        while (cr.find()) if (!cr.group(1).contains("armored_allmight") && !cr.group(2).contains("ITEMS.register")) costumes.add(new String[]{cr.group(1), cr.group(3)});
+        int appCost = 32, tubeCost = 40;
+        Matcher ac = Pattern.compile("APP_COST\\s*=\\s*(\\d+)").matcher(office);
+        if (ac.find()) appCost = num(ac.group(1));
+        Matcher tc = Pattern.compile("equals\\(\"herotube\"\\)\\s*\\?\\s*(\\d+)").matcher(office);
+        if (tc.find()) tubeCost = num(tc.group(1));
+        List<String> apps = new ArrayList<>();
+        Matcher ap = Pattern.compile("APPS\\s*=\\s*List\\.of\\(([^)]*)\\)").matcher(office);
+        if (ap.find()) { Matcher q = Pattern.compile("\"(\\w+)\"").matcher(ap.group(1)); while (q.find()) apps.add(q.group(1)); }
+        Map<String, List<String[]>> channels = new LinkedHashMap<>(); // チャンネル → (技, ポイント)
+        String chSrc = office.substring(Math.max(0, office.indexOf("CHANNELS")));
+        Matcher ch = Pattern.compile("new Channel\\(\"(\\w+)\"|new Video\\(\"(\\w+)\"\\s*,\\s*(\\d+)\\)").matcher(chSrc);
+        String cur = null;
+        while (ch.find()) {
+            if (ch.group(1) != null) { cur = ch.group(1); channels.put(cur, new ArrayList<>()); }
+            else if (cur != null) channels.get(cur).add(new String[]{ch.group(2), ch.group(3)});
+        }
+        write("shops.html", shopsPage(support, slotCost, appCost, tubeCost));
+        urls.add("shops.html");
+        write("items.html", itemsPage(support, costumes, slotCost));
+        urls.add("items.html");
+        write("smartphone.html", phonePage(apps, appCost, tubeCost, channels, support));
+        urls.add("smartphone.html");
         write("index.html", homePage(quirkRows.size(), npcs.size()));
         urls.add("");
         write("404.html", layout("Page not found", "The page you were looking for does not exist.", "",
@@ -628,7 +667,7 @@ public class WikiGen {
                 + "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\"><link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin><link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css2?family=Bangers&family=Noto+Sans:wght@400;600;700;800;900&display=swap\">\n"
                 + "<link rel=\"stylesheet\" href=\"" + r + "style.css\">\n</head>\n<body>\n"
                 + "<header class=\"top\"><div class=\"wrap\"><a class=\"brand\" href=\"" + r + "index.html\">My Hero Craft <span>Wiki</span></a>\n"
-                + "<nav><a href=\"" + r + "quirks/index.html\">Quirks</a><a href=\"" + r + "characters.html\">Characters</a><a href=\"" + r + "guide.html\">Guide</a></nav></div></header>\n"
+                + "<nav><a href=\"" + r + "quirks/index.html\">Quirks</a><a href=\"" + r + "characters.html\">Characters</a><a href=\"" + r + "shops.html\">Shops</a><a href=\"" + r + "items.html\">Items</a><a href=\"" + r + "smartphone.html\">Phone</a><a href=\"" + r + "guide.html\">Guide</a></nav></div></header>\n"
                 + "<main class=\"wrap\">\n" + main + "\n</main>\n"
                 + "<footer class=\"wrap\"><p>Unofficial fan wiki for the Minecraft mod <strong>My Hero Craft [MHC]</strong> (Forge 1.20.1) by kujira. "
                 + "Generated from the mod's data. Not affiliated with My Hero Academia, Mojang or Microsoft.</p></footer>\n"
@@ -642,6 +681,9 @@ public class WikiGen {
                 + "<div class=\"cards\">"
                 + card("quirks/index.html", "Quirks", "Every quirk you can get, with its skills, attack power, cooldowns and skill tree.")
                 + card("characters.html", "Characters", "Heroes, U.A. students and villains that appear in the world, with their stats and quirks.")
+                + card("shops.html", "Shops", "Mei Hatsume's Support Workshop and Lunch Rush's Cafeteria: what they sell and the prices.")
+                + card("items.html", "Items", "Support items and every costume you can have made.")
+                + card("smartphone.html", "Smartphone", "Hero agencies, villain groups, allies, apps and HeroTube moves.")
                 + card("guide.html", "Guide", "Controls, Hero Mode, skill points, the skill tree and the config file.")
                 + "</div>";
         return layout(SITE, "Unofficial wiki for My Hero Craft [MHC], a Minecraft Forge 1.20.1 My Hero Academia mod: every quirk, skill, skill tree, character and control.", "", main, 0);
@@ -762,6 +804,7 @@ public class WikiGen {
             b.append("<a class=\"").append(side(n.group())).append("\" href=\"characters/").append(n.id()).append(".html\">").append(esc(label(n))).append("</a>");
         }
         if (grp != null) b.append("</div>");
+        b.append("<h2 class=\"band hero\">Shopkeepers</h2><div class=\"names\"><a class=\"student\" href=\"shops.html#hatsume\">Mei Hatsume</a><a class=\"hero\" href=\"shops.html#lunchrush\">Lunch Rush</a></div>");
         return layout("Characters", "Heroes, U.A. students and villains in the My Hero Craft Minecraft mod.", "characters.html", b.toString(), 0);
     }
 
@@ -824,6 +867,108 @@ public class WikiGen {
         }
         s.append("<polygon class=\"val\" points=\"").append(val).append("\"/></svg>");
         return s.toString();
+    }
+
+    static String itemName(String id) {
+        String n = noFormat(lang("item.mhc." + id));
+        return n.isEmpty() ? titleCase(id) : n;
+    }
+
+    static String slotName(String s) {
+        return switch (s) { case "HELMET" -> "Head"; case "CHESTPLATE" -> "Body"; case "LEGGINGS" -> "Legs"; default -> "Feet"; };
+    }
+
+    static String priceTable(Map<String, Integer> slotCost) {
+        StringBuilder b = new StringBuilder("<div class=\"table\"><table><thead><tr><th>Piece</th><th>Emeralds</th></tr></thead><tbody>");
+        for (var e : slotCost.entrySet()) b.append("<tr><td>").append(slotName(e.getKey())).append("</td><td><b>").append(e.getValue()).append("</b></td></tr>");
+        return b.append("</tbody></table></div>").toString();
+    }
+
+    static String supportTable(List<String[]> support) {
+        StringBuilder b = new StringBuilder("<div class=\"table\"><table><thead><tr><th>Item</th><th>Emeralds</th></tr></thead><tbody>");
+        for (String[] s : support) b.append("<tr><td><strong>").append(esc(itemName(s[0]))).append("</strong></td><td><b>").append(s[1]).append("</b></td></tr>");
+        return b.append("</tbody></table></div>").toString();
+    }
+
+    static String shopsPage(List<String[]> support, Map<String, Integer> slotCost, int appCost, int tubeCost) {
+        String phone = support.stream().filter(s -> s[0].equals("smartphone")).map(s -> s[1]).findFirst().orElse("?");
+        StringBuilder b = new StringBuilder("<h1 class=\"title\">Shops</h1><p class=\"lead\">Two characters run shops in villages. Pay with emeralds.</p>");
+        b.append("<section id=\"hatsume\" class=\"profile student\"><span class=\"badge\">Support Workshop</span><h1>Mei Hatsume</h1>")
+                .append("<p class=\"quirk\"><span>WHERE</span>Villages</p></section>");
+        b.append("<div class=\"statgrid\"><div class=\"panel\"><h2>How to use</h2><ul>")
+                .append("<li>Mei Hatsume appears in villages and stays there even when you leave.</li>")
+                .append("<li><b>Right-click</b> her to open <b>Hatsume's Support Workshop</b> (sneaking does a normal interaction).</li>")
+                .append("<li>The workshop has two tabs: <b>Costumes</b> and <b>Support</b> items. Pay with emeralds from your inventory.</li>")
+                .append("<li>Right-click her while holding a <a href=\"smartphone.html\">Smartphone</a> to open <b>Hatsume's App Store</b>.</li>")
+                .append("</ul></div><div class=\"panel\"><h2>Costume prices</h2>").append(priceTable(slotCost))
+                .append("<p class=\"note\">Every costume piece costs the same. See all costumes on the <a href=\"items.html#costumes\">Items</a> page.</p></div></div>");
+        b.append("<div class=\"statgrid\"><div class=\"panel\"><h2>Support items</h2>").append(supportTable(support)).append("</div>")
+                .append("<div class=\"panel\"><h2>App Store</h2><p>Install apps on the smartphone in your hand.</p>")
+                .append("<div class=\"reward\"><b>").append(appCost).append("</b><span>emeralds per app (HeroTube: ").append(tubeCost).append(")</span></div>")
+                .append("<p class=\"note\">In Creative mode, apps are free. The smartphone itself costs ").append(phone).append(" emeralds.</p></div></div>");
+        b.append("<section id=\"lunchrush\" class=\"profile hero\" style=\"margin-top:36px\"><span class=\"badge\">Cafeteria</span><h1>Lunch Rush</h1>")
+                .append("<p class=\"quirk\"><span>WHERE</span>Villages</p></section>");
+        b.append("<div class=\"statgrid\"><div class=\"panel\"><h2>How to use</h2><ul>")
+                .append("<li>Lunch Rush appears in villages and stays there even when you leave.</li>")
+                .append("<li><b>Right-click</b> him to open <b>Lunch Rush's Cafeteria</b>.</li>")
+                .append("<li>He can cook <b>any food</b>, including food from other mods. The menu has three tabs: U.A. Specials, Classics and Others.</li>")
+                .append("<li>Choose how many you want. Hold <kbd>Shift</kbd> to change the amount by 8.</li>")
+                .append("</ul></div><div class=\"panel\"><h2>Prices</h2>")
+                .append("<div class=\"reward\"><b>1 : 1</b><span>one emerald for each hunger point the food restores</span></div>")
+                .append("<ul><li>Golden Apple: <b>30</b> emeralds</li><li>Not on the menu: Food Set, Blood Collection Container, Enchanted Golden Apple</li></ul></div></div>");
+        return layout("Shops", "Mei Hatsume's Support Workshop and Lunch Rush's Cafeteria in the My Hero Craft Minecraft mod: what they sell and for how many emeralds.", "shops.html", b.toString(), 0);
+    }
+
+    static String itemsPage(List<String[]> support, List<String[]> costumes, Map<String, Integer> slotCost) {
+        StringBuilder b = new StringBuilder("<h1 class=\"title\">Items</h1><p class=\"lead\">Support items and costumes. All of them are made at <a href=\"shops.html#hatsume\">Mei Hatsume's Support Workshop</a> with emeralds.</p>");
+        b.append("<h2 class=\"band hero\" id=\"support\">Support items</h2>").append(supportTable(support));
+        b.append("<h2 class=\"band student\" id=\"costumes\">Costumes</h2><p class=\"note\">Prices per piece: ")
+                .append(slotCost.entrySet().stream().map(e -> slotName(e.getKey()) + " " + e.getValue()).collect(Collectors.joining(" / "))).append(" emeralds.</p>");
+        Map<String, List<String>> sets = new LinkedHashMap<>();
+        for (String[] c : costumes) {
+            String n = itemName(c[0]);
+            int i = n.lastIndexOf('[');
+            String set = (i > 0 ? n.substring(0, i) : n).trim();
+            sets.computeIfAbsent(set, k -> new ArrayList<>()).add(slotName(c[1]));
+        }
+        b.append("<div class=\"grid\">");
+        for (var e : sets.entrySet())
+            b.append("<div class=\"item\"><strong>").append(esc(e.getKey())).append("</strong><span class=\"desc\">")
+                    .append(String.join(" · ", e.getValue())).append("</span></div>");
+        b.append("</div>");
+        return layout("Items", "Support items and costumes in the My Hero Craft Minecraft mod, with their emerald prices.", "items.html", b.toString(), 0);
+    }
+
+    static String phonePage(List<String> apps, int appCost, int tubeCost, Map<String, List<String[]>> channels, List<String[]> support) {
+        String phone = support.stream().filter(s -> s[0].equals("smartphone")).map(s -> s[1]).findFirst().orElse("?");
+        StringBuilder b = new StringBuilder("<h1 class=\"title\">Smartphone</h1><p class=\"lead\">Run a hero agency or villain group, call your allies and learn new moves from HeroTube.</p>");
+        b.append("<div class=\"statgrid\"><div class=\"panel\"><h2>Getting one</h2><div class=\"reward\"><b>").append(phone)
+                .append("</b><span>emeralds at <a href=\"shops.html#hatsume\">Mei Hatsume's workshop</a> (Support tab)</span></div>")
+                .append("<p><b>Right-click</b> with the smartphone to open it. The <b>Agency</b> app is installed from the start. Other apps are bought from Hatsume's App Store.</p></div>")
+                .append("<div class=\"panel\"><h2>Agency / Villain group</h2><ul>")
+                .append("<li>Create a <b>Hero Agency</b> (hero side) or a <b>Villain Group</b> (villain side) and give it a name.</li>")
+                .append("<li>To invite a player, both of you hold a smartphone and you right-click them.</li>")
+                .append("<li>To recruit a character as an ally, right-click an ally-side character that is under <b>10% health</b> with the smartphone.</li>")
+                .append("<li>Allies can be told to <b>Follow</b> or <b>Stay</b>. Leaders can kick members or disband the group.</li></ul></div></div>");
+        b.append("<h2 class=\"band hero\">Apps</h2><div class=\"table\"><table><thead><tr><th>App</th><th>What it does</th><th>Emeralds</th></tr></thead><tbody>")
+                .append("<tr><td><strong>").append(esc(noFormat(lang("gui.mhc.phone.app.office")))).append("</strong></td><td>Create or manage your agency or group, members and allies.</td><td>Free</td></tr>");
+        for (String a : apps)
+            b.append("<tr><td><strong>").append(esc(noFormat(lang("gui.mhc.phone.app." + a)))).append("</strong></td><td>")
+                    .append(esc(noFormat(lang("gui.mhc.phone.desc." + a)))).append("</td><td><b>").append(a.equals("herotube") ? tubeCost : appCost).append("</b></td></tr>");
+        b.append("</tbody></table></div>");
+        b.append("<h2 class=\"band student\" id=\"herotube\">HeroTube</h2><p>Watch videos to learn moves. Each video costs <b>skill points</b> (free in Creative mode). "
+                + "Capture Scarf moves need Aizawa's costume (body) and syringe moves need Himiko Toga's costume Ver2 (body) to be used.</p>");
+        for (var c : channels.entrySet()) {
+            String cn = noFormat(lang("gui.mhc.herotube.channel." + c.getKey()));
+            b.append("<h2>").append(esc(cn.isEmpty() ? titleCase(c.getKey()) : cn)).append("</h2><div class=\"table\"><table><thead><tr><th>Video</th><th>Move</th><th>Points</th></tr></thead><tbody>");
+            for (String[] v : c.getValue()) {
+                String title = noFormat(lang("gui.mhc.herotube.video." + v[0]));
+                b.append("<tr><td>").append(esc(title.isEmpty() ? skillName(v[0]) : title)).append("</td><td>").append(esc(skillName(v[0])))
+                        .append("</td><td><b>").append(v[1]).append("</b></td></tr>");
+            }
+            b.append("</tbody></table></div>");
+        }
+        return layout("Smartphone", "The smartphone in the My Hero Craft Minecraft mod: hero agencies, villain groups, allies, apps and HeroTube moves.", "smartphone.html", b.toString(), 0);
     }
 
     static String guidePage() {
