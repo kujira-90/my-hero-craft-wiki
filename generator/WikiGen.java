@@ -52,21 +52,10 @@ public class WikiGen {
         urls.add("quirks/");
         write("characters.html", charactersPage(npcs));
         urls.add("characters.html");
-        Path res = mod.resolve("src/main/resources/assets/mhc");
         for (Npc n : npcs) {
             write("characters/" + n.id() + ".html", charPage(n, trees));
             urls.add("characters/" + n.id() + ".html");
-            for (Part p : n.parts()) {
-                for (String f : List.of(p.geo(), p.tex())) {
-                    Path src = res.resolve(f), dst = out.resolve("assets").resolve(f);
-                    if (Files.exists(src)) {
-                        Files.createDirectories(dst.getParent());
-                        Files.copy(src, dst, StandardCopyOption.REPLACE_EXISTING);
-                    }
-                }
-            }
         }
-        write("viewer.js", VIEWER);
         write("guide.html", guidePage());
         urls.add("guide.html");
         write("index.html", homePage(quirkRows.size(), npcs.size()));
@@ -636,6 +625,7 @@ public class WikiGen {
                 + "<meta property=\"og:description\" content=\"" + esc(desc) + "\">\n"
                 + "<meta property=\"og:type\" content=\"website\">\n"
                 + "<meta property=\"og:url\" content=\"" + base + "/" + canonical + "\">\n"
+                + "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\"><link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin><link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css2?family=Bangers&family=Noto+Sans:wght@400;600;700;800;900&display=swap\">\n"
                 + "<link rel=\"stylesheet\" href=\"" + r + "style.css\">\n</head>\n<body>\n"
                 + "<header class=\"top\"><div class=\"wrap\"><a class=\"brand\" href=\"" + r + "index.html\">My Hero Craft <span>Wiki</span></a>\n"
                 + "<nav><a href=\"" + r + "quirks/index.html\">Quirks</a><a href=\"" + r + "characters.html\">Characters</a><a href=\"" + r + "guide.html\">Guide</a></nav></div></header>\n"
@@ -754,71 +744,60 @@ public class WikiGen {
         return m.find() ? n.name() + " (" + m.group(1) + ")" : n.name();
     }
 
+    /** 陣営ごとの色(CSS のクラス)。 */
+    static String side(String group) {
+        return group.startsWith("Villain") ? "villain" : group.startsWith("U.A.") ? "student" : "hero";
+    }
+
     static String charactersPage(List<Npc> npcs) {
-        StringBuilder b = new StringBuilder("<h1>Characters</h1><p class=\"lead\">Characters from My Hero Academia that appear in My Hero Craft. "
-                + "Click a character to see their model, quirk and stats.</p>");
+        StringBuilder b = new StringBuilder("<h1 class=\"title\">Characters</h1><p class=\"lead\">Heroes, U.A. students and villains that appear in My Hero Craft. "
+                + "Pick a character to see their quirk and stats.</p>");
         String grp = null;
         for (Npc n : npcs) {
             if (!n.group().equals(grp)) {
                 if (grp != null) b.append("</div>");
                 grp = n.group();
-                b.append("<h2>").append(esc(grp)).append("</h2><div class=\"names\">");
+                b.append("<h2 class=\"band ").append(side(grp)).append("\">").append(esc(grp)).append("</h2><div class=\"names\">");
             }
-            b.append("<a href=\"characters/").append(n.id()).append(".html\">").append(esc(label(n))).append("</a>");
+            b.append("<a class=\"").append(side(n.group())).append("\" href=\"characters/").append(n.id()).append(".html\">").append(esc(label(n))).append("</a>");
         }
         if (grp != null) b.append("</div>");
         return layout("Characters", "Heroes, U.A. students and villains in the My Hero Craft Minecraft mod.", "characters.html", b.toString(), 0);
     }
 
     static String charPage(Npc n, Map<String, Tree> trees) {
+        String sd = side(n.group());
         StringBuilder b = new StringBuilder();
         b.append("<p class=\"crumb\"><a href=\"../characters.html\">Characters</a> / ").append(esc(n.group())).append("</p>");
-        b.append("<h1>").append(esc(label(n))).append("</h1>");
-        String quirks = n.quirks().stream().map(q -> q.equals("random") ? "Random (any quirk)" : trees.containsKey(q)
-                ? "<a href=\"../quirks/" + q + ".html\">" + esc(kosei(q).name()) + "</a>" : esc(kosei(q).name())).collect(Collectors.joining(", "));
-        b.append("<p class=\"lead\">Quirk: ").append(quirks).append("</p>");
-        b.append("<div class=\"char\">");
-        // 3D モデル
-        b.append("<div class=\"panel\"><h2>Model</h2>");
-        if (!n.parts().isEmpty()) {
-            StringBuilder json = new StringBuilder("[");
-            for (int i = 0; i < n.parts().size(); i++) {
-                Part p = n.parts().get(i);
-                json.append(i > 0 ? "," : "").append("{\"geo\":\"../assets/").append(p.geo()).append("\",\"tex\":\"../assets/").append(p.tex())
-                        .append("\",\"hide\":[").append(p.hide().stream().map(h -> "\"" + h + "\"").collect(Collectors.joining(","))).append("]}");
-            }
-            b.append("<div id=\"viewer\" class=\"viewer\" aria-label=\"3D model of ").append(esc(n.name())).append("\"></div>")
-                    .append("<p class=\"note\">Drag to rotate, scroll to zoom.</p>")
-                    .append("<script id=\"model-data\" type=\"application/json\">").append(json).append("]</script>")
-                    .append("<script>if(location.protocol==='file:'){document.getElementById('viewer').innerHTML='<p class=\"note\" style=\"padding:16px\">The 3D model cannot load from a file on your PC. Open the wiki with preview.bat or on the website.</p>';}</script>");
-        } else {
-            b.append("<p class=\"note\">No model data.</p>");
+        String quirks = n.quirks().stream().map(q -> q.equals("random") ? "Random" : trees.containsKey(q)
+                ? "<a href=\"../quirks/" + q + ".html\">" + esc(kosei(q).name()) + "</a>" : esc(kosei(q).name())).collect(Collectors.joining(" / "));
+        // 名前の帯(ヒーローカード風)
+        b.append("<section class=\"profile ").append(sd).append("\"><span class=\"badge\">").append(esc(n.group())).append("</span>")
+                .append("<h1>").append(esc(label(n))).append("</h1>")
+                .append("<p class=\"quirk\"><span>QUIRK</span>").append(quirks).append("</p>");
+        if (n.stats() != null) {
+            int total = Arrays.stream(n.stats()).sum();
+            b.append("<div class=\"score\"><b>").append(total).append("</b><span>TOTAL</span></div>");
         }
-        b.append("</div>");
-        // ステータス
-        b.append("<div class=\"panel\"><h2>Stats</h2>");
+        b.append("</section>");
         String[] labels = {"Health", "Strength", "Dexterity", "Defense", "Quirk"};
         if (n.stats() != null) {
-            b.append(radar(n.stats(), labels));
-            b.append("<div class=\"bars\">");
+            b.append("<div class=\"statgrid\"><div class=\"panel\"><h2>Stats</h2>").append(radar(n.stats(), labels)).append("</div>");
+            b.append("<div class=\"panel\"><h2>Details</h2><div class=\"bars\">");
             for (int i = 0; i < 5; i++) {
                 int v = n.stats()[i];
                 b.append("<div class=\"bar\"><span>").append(labels[i]).append("</span><div><i style=\"width:").append(Math.min(100, v * 5)).append("%\"></i></div><b>").append(v).append("</b></div>");
             }
-            b.append("</div><p class=\"note\">Each stat goes up to 20. Defeating this character alone gives about ")
-                    .append(Math.max(1, Math.round(Arrays.stream(n.stats()).sum() / 4.0))).append(" skill points.</p>");
+            b.append("</div><p class=\"note\">Each stat goes up to 20.</p><div class=\"reward\"><b>")
+                    .append(Math.max(1, Math.round(Arrays.stream(n.stats()).sum() / 4.0)))
+                    .append("</b><span>skill points for defeating this character alone</span></div></div></div>");
         } else if (n.quirks().contains("random")) {
-            b.append("<p>Each stat is random from 0 to 4. Gives about 2–3 skill points (up to 5).</p>");
+            b.append("<div class=\"panel\"><h2>Stats</h2><p>Each stat is random from 0 to 4, and the quirk is random too.</p>"
+                    + "<div class=\"reward\"><b>2–5</b><span>skill points for defeating one alone (about 2–3 on average)</span></div></div>");
         } else {
-            b.append("<p>Quirk level ").append(n.level()).append(".</p>");
+            b.append("<div class=\"panel\"><h2>Stats</h2><p>Quirk level ").append(n.level()).append(".</p></div>");
         }
-        b.append("</div></div>");
-        if (!n.parts().isEmpty()) {
-            b.append("<script type=\"importmap\">{\"imports\":{\"three\":\"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js\","
-                    + "\"three/addons/\":\"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/\"}}</script>")
-                    .append("<script type=\"module\" src=\"../viewer.js\"></script>");
-        }
-        return layout(label(n) + " (Character)", n.name() + " in the My Hero Craft Minecraft mod: quirk, stats and 3D model.",
+        return layout(label(n) + " (Character)", n.name() + " in the My Hero Craft Minecraft mod: quirk and stats.",
                 "characters/" + n.id() + ".html", b.toString(), 1);
     }
 
@@ -1013,49 +992,74 @@ public class WikiGen {
             """;
 
     static final String CSS = """
-            :root{--bg:#f7f8fb;--panel:#fff;--ink:#14171f;--muted:#5b6475;--line:#e3e6ee;--accent:#1f7a52;--accent2:#e8b21a;--chal:#b4234a}
-            @media (prefers-color-scheme:dark){:root{--bg:#10131a;--panel:#171b24;--ink:#e8ebf2;--muted:#9aa3b5;--line:#272d3a;--accent:#4cc58c;--accent2:#f1c24a;--chal:#ef6d8f}}
+            :root{--paper:#fbf7ec;--panel:#ffffff;--ink:#16181d;--muted:#5d6270;--line:#16181d;--soft:#e6e1d3;
+              --hero:#1d9a5b;--gold:#ffcc1f;--red:#e0353b;--navy:#1b2a5c;--villain:#6b2d8f;--student:#1d9a5b;--pro:#e0a100}
             *{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
-            body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-            a{color:var(--accent)}.wrap{max-width:1100px;margin:0 auto;padding:0 16px}
-            .top{background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
-            .top .wrap{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:56px;flex-wrap:wrap}
-            .brand{font-weight:800;font-size:18px;color:var(--ink);text-decoration:none}.brand span{color:var(--accent)}
-            nav a{margin-left:16px;text-decoration:none;color:var(--ink);font-weight:600}nav a:hover{color:var(--accent)}
-            main{padding:24px 16px 48px}h1{font-size:32px;line-height:1.2;margin:8px 0 8px}h2{margin-top:32px;font-size:22px}
-            .lead{font-size:18px;color:var(--muted);max-width:760px}.users{color:var(--muted)}
-            .hero{padding:24px 0}.stats span{display:inline-block;margin-right:12px;padding:4px 10px;border-radius:999px;background:var(--panel);border:1px solid var(--line);font-weight:600}
-            .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
-            .card{display:block;padding:20px;background:var(--panel);border:1px solid var(--line);border-radius:12px;text-decoration:none;color:var(--ink)}
-            .card:hover{border-color:var(--accent)}.card h2{margin:0 0 6px;color:var(--accent)}.card p{margin:0;color:var(--muted)}
-            .search{width:100%;max-width:520px;padding:10px 14px;font-size:16px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink)}
-            .cat{margin-top:28px}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
-            .item{display:flex;flex-direction:column;gap:2px;padding:14px;background:var(--panel);border:1px solid var(--line);border-radius:10px;text-decoration:none;color:var(--ink)}
-            .item:hover{border-color:var(--accent)}.item .users{font-size:13px}.item .desc{font-size:14px;color:var(--muted)}
-            .crumb{color:var(--muted);margin:0}.table{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
-            table{border-collapse:collapse;width:100%;font-size:15px}th,td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
-            th{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);white-space:nowrap}tr:last-child td{border-bottom:0}
-            .tag{display:inline-block;font-size:12px;font-weight:700;padding:1px 8px;border-radius:999px;margin-left:4px;vertical-align:middle}
-            .goal{background:color-mix(in srgb,var(--accent2) 25%,transparent);color:var(--ink)}.challenge{background:color-mix(in srgb,var(--chal) 22%,transparent);color:var(--ink)}
+            body{margin:0;color:var(--ink);font:16px/1.65 "Noto Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+              background:var(--paper) radial-gradient(rgba(22,24,29,.07) 1px,transparent 1.2px) 0 0/14px 14px}
+            a{color:var(--hero);font-weight:600}.wrap{max-width:1100px;margin:0 auto;padding:0 16px}
+            .top{background:var(--navy);border-bottom:4px solid var(--gold);position:sticky;top:0;z-index:5}
+            .top .wrap{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:60px;flex-wrap:wrap}
+            .brand{display:inline-block;font-family:Bangers,Impact,sans-serif;letter-spacing:1.5px;font-size:28px;color:#fff;text-decoration:none;transform:skewX(-6deg)}
+            .brand span{color:var(--gold)}
+            nav a{margin-left:18px;text-decoration:none;color:#fff;font-weight:800;letter-spacing:.5px;text-transform:uppercase;font-size:14px}
+            nav a:hover{color:var(--gold)}
+            main{padding:24px 16px 56px}
+            h1,.title{font-family:Bangers,Impact,sans-serif;font-weight:400;letter-spacing:1.5px;font-size:46px;line-height:1.05;margin:10px 0 10px;
+              color:var(--ink);text-shadow:3px 3px 0 var(--gold)}
+            h2{font-family:Bangers,Impact,sans-serif;font-weight:400;letter-spacing:1px;font-size:28px;margin:34px 0 12px}
+            .lead{font-size:18px;color:var(--muted);max-width:780px}.users{color:var(--muted)}
+            .hero{padding:28px 0 10px}.stats span{display:inline-block;margin:0 10px 8px 0;padding:4px 14px;border:2px solid var(--line);border-radius:999px;background:var(--gold);font-weight:800;box-shadow:3px 3px 0 var(--line)}
+            .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:18px;margin-top:10px}
+            .card{display:block;padding:20px;background:var(--panel);border:2px solid var(--line);border-radius:6px;text-decoration:none;color:var(--ink);box-shadow:5px 5px 0 var(--line);transition:transform .1s}
+            .card:hover{transform:translate(-2px,-2px);box-shadow:7px 7px 0 var(--line)}
+            .card h2{margin:0 0 6px;font-size:30px;color:var(--hero)}.card p{margin:0;color:var(--muted)}
+            .search{width:100%;max-width:520px;padding:12px 16px;font-size:16px;border:2px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink);box-shadow:3px 3px 0 var(--line)}
+            .cat{margin-top:30px}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
+            .item{display:flex;flex-direction:column;gap:2px;padding:14px;background:var(--panel);border:2px solid var(--line);border-radius:6px;text-decoration:none;color:var(--ink);box-shadow:3px 3px 0 var(--line)}
+            .item:hover{background:#fff8d9}.item .users{font-size:13px}.item .desc{font-size:14px;color:var(--muted)}
+            .crumb{color:var(--muted);margin:0;font-size:14px}
+            .table{overflow-x:auto;border:2px solid var(--line);border-radius:6px;background:var(--panel);box-shadow:4px 4px 0 var(--line)}
+            table{border-collapse:collapse;width:100%;font-size:15px}th,td{padding:10px 12px;border-bottom:1px solid var(--soft);text-align:left;vertical-align:top}
+            th{background:var(--navy);color:#fff;font-size:13px;text-transform:uppercase;letter-spacing:.05em;white-space:nowrap}tr:last-child td{border-bottom:0}
+            .tag{display:inline-block;font-size:12px;font-weight:800;padding:1px 8px;border:1.5px solid var(--line);border-radius:999px;margin-left:4px;vertical-align:middle}
+            .goal{background:var(--gold)}.challenge{background:var(--red);color:#fff}
             .passives li{margin-bottom:6px}.note{color:var(--muted);font-size:14px}
-            .tree,.tree ul{list-style:none;padding-left:18px;margin:0}.tree{padding-left:0}
-            .tree li{position:relative;padding:3px 0 3px 14px;border-left:2px solid var(--line)}.tree li>span{display:inline-block;padding:2px 10px;border-radius:8px;background:var(--panel);border:1px solid var(--line)}
-            .inline{list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:8px}.inline li a{display:inline-block;padding:4px 10px;border:1px solid var(--line);border-radius:999px;background:var(--panel);text-decoration:none}
-            .formula{padding:12px 16px;background:var(--panel);border:1px solid var(--line);border-radius:10px;font-weight:600}
-            kbd,code{font-family:ui-monospace,Consolas,monospace;font-size:14px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:1px 6px}
-            footer{color:var(--muted);font-size:14px;padding:24px 16px 40px;border-top:1px solid var(--line)}
-            .names{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
-            .names a{display:block;padding:10px 14px;background:var(--panel);border:1px solid var(--line);border-radius:10px;text-decoration:none;color:var(--ink);font-weight:600}
-            .names a:hover{border-color:var(--accent);color:var(--accent)}
-            .char{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start}
-            .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}.panel h2{margin:0 0 8px;font-size:18px}
-            .viewer{width:100%;aspect-ratio:3/4;max-height:560px;border-radius:10px;background:radial-gradient(circle at 50% 40%,color-mix(in srgb,var(--accent) 14%,transparent),transparent 70%)}
-            .viewer canvas{width:100%;height:100%;display:block;cursor:grab}
-            .radar{width:100%;max-width:340px;display:block;margin:0 auto}.radar .ring{fill:none;stroke:var(--line)}.radar .axis{stroke:var(--line)}
-            .radar .val{fill:color-mix(in srgb,var(--accent) 30%,transparent);stroke:var(--accent);stroke-width:2}.radar text{fill:var(--muted);font-size:12px}
-            .bars{display:grid;gap:6px;margin-top:8px}.bar{display:grid;grid-template-columns:80px 1fr 28px;align-items:center;gap:8px;font-size:14px}
-            .bar div{height:8px;border-radius:999px;background:var(--line);overflow:hidden}.bar i{display:block;height:100%;background:var(--accent)}.bar b{text-align:right}
-            @media (max-width:760px){.char{grid-template-columns:1fr}.names{grid-template-columns:repeat(2,minmax(0,1fr))}}
-            @media (max-width:600px){h1{font-size:26px}nav a{margin-left:12px}}
+            .tree,.tree ul{list-style:none;padding-left:20px;margin:0}.tree{padding-left:0}
+            .tree li{position:relative;padding:4px 0 4px 16px;border-left:3px solid var(--hero)}
+            .tree li>span{display:inline-block;padding:3px 12px;border:2px solid var(--line);border-radius:6px;background:var(--panel);font-weight:600;box-shadow:2px 2px 0 var(--line)}
+            .inline{list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:8px}.inline li a{display:inline-block;padding:4px 12px;border:2px solid var(--line);border-radius:999px;background:var(--panel);text-decoration:none;color:var(--ink)}
+            .formula{padding:14px 18px;background:var(--gold);border:2px solid var(--line);border-radius:6px;font-weight:800;box-shadow:4px 4px 0 var(--line)}
+            kbd,code{font-family:ui-monospace,Consolas,monospace;font-size:14px;background:#fff;border:1.5px solid var(--line);border-radius:4px;padding:1px 6px}
+            footer{color:var(--muted);font-size:14px;padding:24px 16px 40px;border-top:2px solid var(--line)}
+            .band{display:inline-block;padding:2px 16px;color:#fff;border:2px solid var(--line);transform:skewX(-8deg);box-shadow:4px 4px 0 var(--line)}
+            .band.hero{background:var(--pro);color:var(--ink)}.band.student{background:var(--student)}.band.villain{background:var(--villain)}
+            .names{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+            .names a{display:block;padding:12px 14px;background:var(--panel);border:2px solid var(--line);border-left-width:8px;border-radius:6px;text-decoration:none;color:var(--ink);font-weight:700;box-shadow:3px 3px 0 var(--line)}
+            .names a.hero{border-left-color:var(--pro)}.names a.student{border-left-color:var(--student)}.names a.villain{border-left-color:var(--villain)}
+            .names a:hover{transform:translate(-1px,-1px);background:#fff8d9}
+            .profile{position:relative;overflow:hidden;margin:10px 0 22px;padding:26px 28px;border:3px solid var(--line);border-radius:8px;color:#fff;box-shadow:7px 7px 0 var(--line)}
+            .profile::after{content:"";position:absolute;inset:0;background:radial-gradient(rgba(255,255,255,.18) 1.4px,transparent 1.6px) 0 0/12px 12px;pointer-events:none}
+            .profile.hero{background:linear-gradient(115deg,var(--navy) 0 55%,var(--pro) 55% 100%)}
+            .profile.student{background:linear-gradient(115deg,var(--navy) 0 55%,var(--student) 55% 100%)}
+            .profile.villain{background:linear-gradient(115deg,#1b1424 0 55%,var(--villain) 55% 100%)}
+            .profile h1{color:#fff;text-shadow:4px 4px 0 var(--line);font-size:56px;margin:6px 0}
+            .profile .badge{display:inline-block;background:var(--gold);color:var(--ink);font-weight:900;font-size:13px;letter-spacing:.08em;text-transform:uppercase;padding:2px 10px;border:2px solid var(--line);transform:skewX(-8deg)}
+            .profile .quirk{margin:0;font-size:18px;font-weight:700}.profile .quirk span{font-size:12px;letter-spacing:.12em;margin-right:8px;opacity:.85}
+            .profile .quirk a{color:var(--gold)}
+            .profile .score{position:absolute;right:24px;top:50%;transform:translateY(-50%);text-align:center;z-index:1}
+            .profile .score b{display:block;font-family:Bangers,Impact,sans-serif;font-weight:400;font-size:64px;line-height:1;color:var(--gold);text-shadow:3px 3px 0 var(--line)}
+            .profile .score span{font-size:12px;letter-spacing:.15em;font-weight:800}
+            .profile>*{position:relative;z-index:1}
+            .statgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px;align-items:start}
+            .panel{background:var(--panel);border:2px solid var(--line);border-radius:8px;padding:18px;box-shadow:5px 5px 0 var(--line)}.panel h2{margin:0 0 8px;font-size:26px}
+            .radar{width:100%;max-width:360px;display:block;margin:0 auto}.radar .ring{fill:none;stroke:var(--soft);stroke-width:1.5}.radar .axis{stroke:var(--soft)}
+            .radar .val{fill:rgba(255,204,31,.55);stroke:var(--ink);stroke-width:2.5;stroke-linejoin:round}.radar text{fill:var(--ink);font-size:12px;font-weight:700}
+            .bars{display:grid;gap:10px;margin-top:6px}.bar{display:grid;grid-template-columns:86px 1fr 30px;align-items:center;gap:10px;font-weight:700}
+            .bar div{height:14px;border:2px solid var(--line);border-radius:4px;background:#f1ede0;overflow:hidden}.bar i{display:block;height:100%;background:repeating-linear-gradient(135deg,var(--hero) 0 8px,#22b56b 8px 16px)}.bar b{text-align:right;font-size:18px}
+            .reward{display:flex;align-items:center;gap:14px;margin-top:14px;padding:12px 14px;background:var(--gold);border:2px solid var(--line);border-radius:6px}
+            .reward b{font-family:Bangers,Impact,sans-serif;font-weight:400;font-size:40px;line-height:1}.reward span{font-weight:700}
+            @media (max-width:760px){.statgrid{grid-template-columns:1fr}.names{grid-template-columns:repeat(2,minmax(0,1fr))}.profile .score{position:static;transform:none;text-align:left;margin-top:10px}.profile h1{font-size:44px}}
+            @media (max-width:600px){h1,.title{font-size:36px}nav a{margin-left:12px}}
             """;
 }
