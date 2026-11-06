@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://kujira-90.github.io/my-hero-craft-wiki/sitemap.xml
