@@ -12,14 +12,20 @@ import java.util.stream.*;
 public class WikiGen {
     static Path mod, out;
     static String base;
-    static Map<String, String> en = new HashMap<>();
+    static Map<String, String> en = new HashMap<>(), ja = new HashMap<>();
     static final String SITE = "My Hero Craft Wiki";
+    /** 今作っている言語("en" か "ja") */
+    static String L = "en";
+
+    /** 今の言語の文 */
+    static String T(String enText, String jaText) { return L.equals("ja") ? jaText : enText; }
 
     public static void main(String[] a) throws Exception {
         mod = Path.of(a[0]);
         out = Path.of(a[1]);
         base = a.length > 2 ? a[2].replaceAll("/+$", "") : "https://kujira-90.github.io/my-hero-craft-wiki";
         en = loadLang(mod.resolve("src/main/resources/assets/mhc/lang/en_us.json"));
+        ja = loadLang(mod.resolve("src/main/resources/assets/mhc/lang/ja_jp.json"));
         Path java = mod.resolve("src/main/java/com/kujira/mhc");
 
         Map<String, List<String>> cats = categories(strip(read(java.resolve("Math/SkillMath.java"))));
@@ -35,29 +41,6 @@ public class WikiGen {
         Set<String> dispatched = dispatched(strip(read(java.resolve("Ability/KoseiSkills.java"))));
         List<Npc> npcs = npcs(java);
 
-        Files.createDirectories(out.resolve("quirks"));
-        List<String> urls = new ArrayList<>();
-        List<String[]> quirkRows = new ArrayList<>(); // id, name, category, users, desc
-        for (var c : cats.entrySet()) {
-            for (String q : c.getValue()) {
-                Tree t = trees.get(q);
-                if (t == null) continue;
-                Kosei k = kosei(q);
-                quirkRows.add(new String[]{q, k.name, c.getKey(), k.users, plain(lang("mhc.chat.message.note." + q + "_desc"))});
-                write("quirks/" + q + ".html", quirkPage(q, k, c.getKey(), t, cd, dispatched, npcs));
-                urls.add("quirks/" + q + ".html");
-            }
-        }
-        write("quirks/index.html", quirkIndex(quirkRows));
-        urls.add("quirks/");
-        write("characters.html", charactersPage(npcs));
-        urls.add("characters.html");
-        for (Npc n : npcs) {
-            write("characters/" + n.id() + ".html", charPage(n, trees));
-            urls.add("characters/" + n.id() + ".html");
-        }
-        write("guide.html", guidePage());
-        urls.add("guide.html");
         // 店(発目・ランチラッシュ)・アイテム(サポートアイテム・コスチューム)・スマホ
         String catalog = strip(read(java.resolve("Item/CostumeCatalog.java")));
         String modItems = strip(read(java.resolve("Item/ModItems.java")));
@@ -91,24 +74,58 @@ public class WikiGen {
             if (ch.group(1) != null) { cur = ch.group(1); channels.put(cur, new ArrayList<>()); }
             else if (cur != null) channels.get(cur).add(new String[]{ch.group(2), ch.group(3)});
         }
-        write("shops.html", shopsPage(support, slotCost, appCost, tubeCost));
-        urls.add("shops.html");
-        write("items.html", itemsPage(support, costumes, slotCost));
-        urls.add("items.html");
-        write("smartphone.html", phonePage(apps, appCost, tubeCost, channels, support));
-        urls.add("smartphone.html");
-        write("index.html", homePage(quirkRows.size(), npcs.size()));
-        urls.add("");
+
+        // 英語はそのまま、日本語は ja/ の下に、同じページを作る
+        Path root = out;
+        List<String> urls = new ArrayList<>();
+        int quirkCount = 0;
+        for (String lg : List.of("en", "ja")) {
+            L = lg;
+            out = lg.equals("ja") ? root.resolve("ja") : root;
+            String pre = lg.equals("ja") ? "ja/" : "";
+            List<String[]> quirkRows = new ArrayList<>(); // id, name, category, users, desc
+            for (var c : cats.entrySet()) {
+                for (String q : c.getValue()) {
+                    Tree t = trees.get(q);
+                    if (t == null) continue;
+                    Kosei k = kosei(q);
+                    quirkRows.add(new String[]{q, k.name, c.getKey(), k.users, plain(lang("mhc.chat.message.note." + q + "_desc"))});
+                    write("quirks/" + q + ".html", quirkPage(q, k, c.getKey(), t, cd, dispatched, npcs));
+                    urls.add(pre + "quirks/" + q + ".html");
+                }
+            }
+            quirkCount = quirkRows.size();
+            write("quirks/index.html", quirkIndex(quirkRows));
+            urls.add(pre + "quirks/");
+            write("characters.html", charactersPage(npcs));
+            urls.add(pre + "characters.html");
+            for (Npc n : npcs) {
+                write("characters/" + n.id() + ".html", charPage(n, trees));
+                urls.add(pre + "characters/" + n.id() + ".html");
+            }
+            write("guide.html", guidePage());
+            urls.add(pre + "guide.html");
+            write("shops.html", shopsPage(support, slotCost, appCost, tubeCost));
+            urls.add(pre + "shops.html");
+            write("items.html", itemsPage(support, costumes, slotCost));
+            urls.add(pre + "items.html");
+            write("smartphone.html", phonePage(apps, appCost, tubeCost, channels, support));
+            urls.add(pre + "smartphone.html");
+            write("index.html", homePage(quirkRows.size(), npcs.size()));
+            urls.add(pre);
+            write("style.css", CSS);
+            write("search.js", JS);
+        }
+        L = "en";
+        out = root;
         write("404.html", layout("Page not found", "The page you were looking for does not exist.", "",
-                "<h1>Page not found</h1><p>Go back to the <a href=\"" + rel(0) + "index.html\">home page</a>.</p>", 0));
-        write("style.css", CSS);
-        write("search.js", JS);
+                "<h1>Page not found</h1><p>Go back to the <a href=\"" + base + "/index.html\">home page</a>.</p>", 0));
         write(".nojekyll", "");
         write("robots.txt", "User-agent: *\nAllow: /\nSitemap: " + base + "/sitemap.xml\n");
         StringBuilder sm = new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
         for (String u : urls) sm.append("  <url><loc>").append(base).append("/").append(u).append("</loc></url>\n");
         write("sitemap.xml", sm.append("</urlset>\n").toString());
-        System.out.println("quirks=" + quirkRows.size() + " characters=" + npcs.size() + " pages=" + (urls.size() + 1));
+        System.out.println("quirks=" + quirkCount + " characters=" + npcs.size() + " pages=" + (urls.size() + 1));
     }
 
     // ------------------------------------------------------------------ 読み込み
@@ -128,7 +145,11 @@ public class WikiGen {
         return m;
     }
 
-    static String lang(String k) { return en.getOrDefault(k, ""); }
+    /** 今の言語の翻訳(日本語に無ければ英語) */
+    static String lang(String k) {
+        String v = L.equals("ja") ? ja.get(k) : null;
+        return v != null && !v.isEmpty() ? v : en.getOrDefault(k, "");
+    }
 
     /** コメントを消す(文字列の中はそのまま)。 */
     static String strip(String s) {
@@ -197,7 +218,7 @@ public class WikiGen {
     static Kosei kosei(String q) {
         String raw = noFormat(lang("mhc.chat.message.kosei." + q));
         if (raw.isEmpty()) return new Kosei(titleCase(q), "");
-        Matcher m = Pattern.compile("^(.*?)\\s*[\\[(](?:Users?|Main users?)\\s*:\\s*(.*)[\\])]\\s*$", Pattern.CASE_INSENSITIVE).matcher(raw);
+        Matcher m = Pattern.compile("^(.*?)\\s*[\\[(](?:Users?|Main users?|主な使用者)\\s*[:：]\\s*(.*)[\\])]\\s*$", Pattern.CASE_INSENSITIVE).matcher(raw);
         if (m.find()) return new Kosei(m.group(1).trim(), m.group(2).trim());
         int b = raw.indexOf('[');
         return b > 0 ? new Kosei(raw.substring(0, b).trim(), raw.substring(b + 1).replaceAll("]$", "").trim()) : new Kosei(raw.trim(), "");
@@ -237,7 +258,7 @@ public class WikiGen {
                 String[] kv = p.split(":");
                 if (kv.length != 2) return p;
                 String k = kv[0].trim();
-                k = k.equals("STR") ? "Strength" : k.equals("QUIRK") ? "Quirk" : k.equals("ND") ? "Needs" : titleCase(k.toLowerCase());
+                k = k.equals("STR") ? T("Strength", "筋力") : k.equals("QUIRK") ? T("Quirk", "個性") : k.equals("ND") ? T("Needs", "必要") : titleCase(k.toLowerCase());
                 return k + " " + kv[1].trim();
             }).collect(Collectors.joining(", "));
             s += " (" + parts + ")";
@@ -449,25 +470,25 @@ public class WikiGen {
             if (cases.containsKey(skill)) return seconds(cases.get(skill));
             int i = skill.indexOf('_');
             String q = i < 0 ? skill : skill.substring(0, i), now = i < 0 ? "" : skill.substring(i + 1);
-            if (toggleQuirk.contains(q)) return "On toggle-off";
+            if (toggleQuirk.contains(q)) return T("On toggle-off", "オフにした時");
             Map<String, String> sub = quirkSub.get(q);
             if (sub != null && sub.containsKey(now)) return seconds(sub.get(now));
             if (quirkDefault.containsKey(q)) return seconds(quirkDefault.get(q));
-            return "None";
+            return T("None", "なし");
         }
 
         static String seconds(String v) {
             v = v.replaceAll("f$", "").trim();
             if (v.matches("[0-9.]+")) {
                 double d = Double.parseDouble(v);
-                if (d == 0) return "None";
+                if (d == 0) return T("None", "なし");
                 return d == Math.floor(d) ? String.valueOf((int) d) : String.valueOf(d);
             }
             Matcher m = Pattern.compile("\\?\\s*([0-9.]+)f?\\s*:\\s*0").matcher(v);
-            if (m.find()) return seconds(m.group(1)) + " (when turned off)";
+            if (m.find()) return seconds(m.group(1)) + T(" (when turned off)", "（オフにした時）");
             m = Pattern.compile("\\?\\s*0\\s*:\\s*([0-9.]+)f?").matcher(v);
             if (m.find()) return seconds(m.group(1));
-            return "varies";
+            return T("varies", "変わる");
         }
     }
 
@@ -652,41 +673,72 @@ public class WikiGen {
 
     static String rel(int depth) { return depth == 0 ? "" : "../".repeat(depth); }
 
+    /** 言語の中のパス("" や "quirks/" は index.html を足したリンク先にする) */
+    static String file(String path) { return path.isEmpty() || path.endsWith("/") ? path + "index.html" : path; }
+
+    /** 一覧の分け方(英語の名前)を、今の言語で出す */
+    static String group(String g) {
+        return switch (g) {
+            case "U.A. Students" -> T(g, "雄英生");
+            case "Heroes" -> T(g, "ヒーロー");
+            case "Vigilantes" -> T(g, "ヴィジランテ");
+            case "Villains" -> T(g, "ヴィラン");
+            case "Other Quirks" -> T(g, "その他の個性");
+            default -> g;
+        };
+    }
+
     static String layout(String title, String desc, String canonical, String main, int depth) {
         String r = rel(depth);
         String full = title.equals(SITE) ? SITE : title + " - " + SITE;
-        return "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
+        String enUrl = base + "/" + canonical, jaUrl = base + "/ja/" + canonical;
+        String self = L.equals("ja") ? jaUrl : enUrl;
+        // もう片方の言語の同じページ(英語は ja/ の下、日本語は1つ上)
+        String other = L.equals("ja") ? r + "../" + file(canonical) : r + "ja/" + file(canonical);
+        String otherLabel = L.equals("ja") ? "English" : "日本語";
+        return "<!doctype html>\n<html lang=\"" + L + "\">\n<head>\n<meta charset=\"utf-8\">\n"
                 + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
                 + "<title>" + esc(full) + "</title>\n"
                 + "<meta name=\"description\" content=\"" + esc(desc) + "\">\n"
-                + "<link rel=\"canonical\" href=\"" + base + "/" + canonical + "\">\n"
+                + "<link rel=\"canonical\" href=\"" + self + "\">\n"
+                + "<link rel=\"alternate\" hreflang=\"en\" href=\"" + enUrl + "\">\n"
+                + "<link rel=\"alternate\" hreflang=\"ja\" href=\"" + jaUrl + "\">\n"
+                + "<link rel=\"alternate\" hreflang=\"x-default\" href=\"" + enUrl + "\">\n"
                 + "<meta property=\"og:title\" content=\"" + esc(full) + "\">\n"
                 + "<meta property=\"og:description\" content=\"" + esc(desc) + "\">\n"
                 + "<meta property=\"og:type\" content=\"website\">\n"
-                + "<meta property=\"og:url\" content=\"" + base + "/" + canonical + "\">\n"
-                + "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\"><link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin><link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css2?family=Bangers&family=Noto+Sans:wght@400;600;700;800;900&display=swap\">\n"
+                + "<meta property=\"og:url\" content=\"" + self + "\">\n"
+                + "<meta property=\"og:locale\" content=\"" + (L.equals("ja") ? "ja_JP" : "en_US") + "\">\n"
+                + "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\"><link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin><link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css2?family=Bangers&family=Noto+Sans:wght@400;600;700;800;900&family=Noto+Sans+JP:wght@400;700;900&display=swap\">\n"
                 + "<link rel=\"stylesheet\" href=\"" + r + "style.css\">\n</head>\n<body>\n"
                 + "<header class=\"top\"><div class=\"wrap\"><a class=\"brand\" href=\"" + r + "index.html\">My Hero Craft <span>Wiki</span></a>\n"
-                + "<nav><a href=\"" + r + "quirks/index.html\">Quirks</a><a href=\"" + r + "characters.html\">Characters</a><a href=\"" + r + "shops.html\">Shops</a><a href=\"" + r + "items.html\">Items</a><a href=\"" + r + "smartphone.html\">Phone</a><a href=\"" + r + "guide.html\">Guide</a></nav></div></header>\n"
+                + "<nav><a href=\"" + r + "quirks/index.html\">" + T("Quirks", "個性") + "</a><a href=\"" + r + "characters.html\">" + T("Characters", "キャラ")
+                + "</a><a href=\"" + r + "shops.html\">" + T("Shops", "お店") + "</a><a href=\"" + r + "items.html\">" + T("Items", "アイテム")
+                + "</a><a href=\"" + r + "smartphone.html\">" + T("Phone", "スマホ") + "</a><a href=\"" + r + "guide.html\">" + T("Guide", "ガイド")
+                + "</a><a class=\"lang\" href=\"" + other + "\" hreflang=\"" + (L.equals("ja") ? "en" : "ja") + "\">" + otherLabel + "</a></nav></div></header>\n"
                 + "<main class=\"wrap\">\n" + main + "\n</main>\n"
-                + "<footer class=\"wrap\"><p>Unofficial fan wiki for the Minecraft mod <strong>My Hero Craft [MHC]</strong> (Forge 1.20.1) by kujira. "
-                + "Generated from the mod's data. Not affiliated with My Hero Academia, Mojang or Microsoft.</p></footer>\n"
+                + "<footer class=\"wrap\"><p>" + T("Unofficial fan wiki for the Minecraft mod <strong>My Hero Craft [MHC]</strong> (Forge 1.20.1) by kujira. "
+                + "Generated from the mod's data. Not affiliated with My Hero Academia, Mojang or Microsoft.",
+                "マインクラフトの MOD <strong>My Hero Craft [MHC]</strong>（Forge 1.20.1・作者 kujira）の非公式ファン Wiki です。"
+                + "MOD のデータから自動で作っています。僕のヒーローアカデミア・Mojang・Microsoft とは関係ありません。") + "</p></footer>\n"
                 + "</body>\n</html>\n";
     }
 
     static String homePage(int quirks, int chars) {
         String main = "<section class=\"hero\"><h1>My Hero Craft Wiki</h1>"
-                + "<p class=\"lead\">The guide to <strong>My Hero Craft [MHC]</strong>, a Minecraft Forge 1.20.1 mod that brings the quirks, heroes and villains of My Hero Academia into Minecraft.</p>"
-                + "<p class=\"stats\"><span>" + quirks + " quirks</span><span>" + chars + " characters</span></p></section>"
+                + "<p class=\"lead\">" + T("The guide to <strong>My Hero Craft [MHC]</strong>, a Minecraft Forge 1.20.1 mod that brings the quirks, heroes and villains of My Hero Academia into Minecraft.",
+                "<strong>My Hero Craft [MHC]</strong> は、僕のヒーローアカデミアの個性・ヒーロー・ヴィランをマインクラフトに持ち込む Forge 1.20.1 の MOD です。その遊び方をまとめた Wiki です。") + "</p>"
+                + "<p class=\"stats\"><span>" + quirks + T(" quirks", " 個性") + "</span><span>" + chars + T(" characters", " キャラ") + "</span></p></section>"
                 + "<div class=\"cards\">"
-                + card("quirks/index.html", "Quirks", "Every quirk you can get, with its skills, attack power, cooldowns and skill tree.")
-                + card("characters.html", "Characters", "Heroes, U.A. students and villains that appear in the world, with their stats and quirks.")
-                + card("shops.html", "Shops", "Mei Hatsume's Support Workshop and Lunch Rush's Cafeteria: what they sell and the prices.")
-                + card("items.html", "Items", "Support items and every costume you can have made.")
-                + card("smartphone.html", "Smartphone", "Hero agencies, villain groups, allies, apps and HeroTube moves.")
-                + card("guide.html", "Guide", "Controls, Hero Mode, skill points, the skill tree and the config file.")
+                + card("quirks/index.html", T("Quirks", "個性"), T("Every quirk you can get, with its skills, attack power, cooldowns and skill tree.", "手に入る全部の個性と、その技・攻撃力・クールダウン・スキルツリー。"))
+                + card("characters.html", T("Characters", "キャラクター"), T("Heroes, U.A. students and villains that appear in the world, with their stats and quirks.", "ワールドに出てくるヒーロー・雄英生・ヴィランの個性とステータス。"))
+                + card("shops.html", T("Shops", "お店"), T("Mei Hatsume's Support Workshop and Lunch Rush's Cafeteria: what they sell and the prices.", "発目明のサポート工房と、ランチラッシュの食堂。売っている物と値段。"))
+                + card("items.html", T("Items", "アイテム"), T("Support items and every costume you can have made.", "サポートアイテムと、作ってもらえる全部のコスチューム。"))
+                + card("smartphone.html", T("Smartphone", "スマホ"), T("Hero agencies, villain groups, allies, apps and HeroTube moves.", "ヒーロー事務所・ヴィラングループ・仲間・アプリ・HeroTube の技。"))
+                + card("guide.html", T("Guide", "ガイド"), T("Controls, Hero Mode, skill points, the skill tree and the config file.", "操作・ヒーローモード・スキルポイント・スキルツリー・設定ファイル。"))
                 + "</div>";
-        return layout(SITE, "Unofficial wiki for My Hero Craft [MHC], a Minecraft Forge 1.20.1 My Hero Academia mod: every quirk, skill, skill tree, character and control.", "", main, 0);
+        return layout(SITE, T("Unofficial wiki for My Hero Craft [MHC], a Minecraft Forge 1.20.1 My Hero Academia mod: every quirk, skill, skill tree, character and control.",
+                "僕のヒーローアカデミアのマイクラ MOD「My Hero Craft [MHC]」(Forge 1.20.1) の非公式 Wiki。全部の個性・技・スキルツリー・キャラ・操作をまとめています。"), "", main, 0);
     }
 
     static String card(String href, String t, String d) {
@@ -694,14 +746,16 @@ public class WikiGen {
     }
 
     static String quirkIndex(List<String[]> rows) {
-        StringBuilder b = new StringBuilder("<h1>Quirks</h1><p class=\"lead\">All " + rows.size() + " quirks in My Hero Craft. Type to search by quirk or user.</p>"
-                + "<input id=\"q\" class=\"search\" type=\"search\" placeholder=\"Search quirks (e.g. Explosion, Bakugo)\" aria-label=\"Search quirks\">");
+        StringBuilder b = new StringBuilder("<h1>" + T("Quirks", "個性") + "</h1><p class=\"lead\">"
+                + T("All " + rows.size() + " quirks in My Hero Craft. Type to search by quirk or user.", "My Hero Craft の全 " + rows.size() + " 個性です。個性の名前や使う人の名前で探せます。") + "</p>"
+                + "<input id=\"q\" class=\"search\" type=\"search\" placeholder=\"" + T("Search quirks (e.g. Explosion, Bakugo)", "個性を探す（例：爆破、爆豪）")
+                + "\" aria-label=\"" + T("Search quirks", "個性を探す") + "\">");
         String cat = null;
         for (String[] r : rows) {
             if (!r[2].equals(cat)) {
                 if (cat != null) b.append("</div>");
                 cat = r[2];
-                b.append("<h2 class=\"cat\">").append(esc(cat)).append("</h2><div class=\"grid\">");
+                b.append("<h2 class=\"cat\">").append(esc(group(cat))).append("</h2><div class=\"grid\">");
             }
             b.append("<a class=\"item\" href=\"").append(r[0]).append(".html\" data-s=\"").append(esc((r[1] + " " + r[3] + " " + r[0]).toLowerCase())).append("\">")
                     .append("<strong>").append(esc(r[1])).append("</strong>")
@@ -711,21 +765,22 @@ public class WikiGen {
         }
         if (cat != null) b.append("</div>");
         b.append("<script src=\"../search.js\"></script>");
-        return layout("Quirks", "List of every quirk in the My Hero Craft Minecraft mod, grouped into U.A. students, heroes, villains, vigilantes and others.", "quirks/", b.toString(), 1);
+        return layout(T("Quirks", "個性一覧"), T("List of every quirk in the My Hero Craft Minecraft mod, grouped into U.A. students, heroes, villains, vigilantes and others.",
+                "マイクラ MOD「My Hero Craft」の全部の個性の一覧。雄英生・ヒーロー・ヴィラン・ヴィジランテ・その他に分けています。"), "quirks/", b.toString(), 1);
     }
 
     static String quirkPage(String q, Kosei k, String cat, Tree t, Cd cd, Set<String> dispatched, List<Npc> npcs) {
         String desc = plain(lang("mhc.chat.message.note." + q + "_desc"));
         StringBuilder b = new StringBuilder();
-        b.append("<p class=\"crumb\"><a href=\"index.html\">Quirks</a> / ").append(esc(cat)).append("</p>");
+        b.append("<p class=\"crumb\"><a href=\"index.html\">").append(T("Quirks", "個性")).append("</a> / ").append(esc(group(cat))).append("</p>");
         b.append("<h1>").append(esc(k.name)).append("</h1>");
-        if (!k.users.isEmpty()) b.append("<p class=\"users\">Used by: ").append(esc(k.users)).append("</p>");
+        if (!k.users.isEmpty()) b.append("<p class=\"users\">").append(T("Used by: ", "主な使用者：")).append(esc(k.users)).append("</p>");
         if (!desc.isEmpty()) b.append("<p class=\"lead\">").append(esc(desc)).append("</p>");
 
         List<Node> passives = t.nodes.stream().filter(n -> n.passive).toList();
         List<Node> skills = t.nodes.stream().filter(n -> !n.passive).toList();
         if (!passives.isEmpty()) {
-            b.append("<h2>Passives</h2><ul class=\"passives\">");
+            b.append("<h2>").append(T("Passives", "パッシブ")).append("</h2><ul class=\"passives\">");
             for (Node n : passives) {
                 String[] p = splitNote(lang("mhc.chat.message.note." + n.id));
                 String title = p != null ? noFormat(p[0]) : titleCase(n.id);
@@ -734,31 +789,38 @@ public class WikiGen {
             b.append("</ul>");
         }
         if (!skills.isEmpty()) {
-            b.append("<h2>Skills</h2><div class=\"table\"><table><thead><tr><th>Skill</th><th>Description</th><th>Attack</th><th>Cooldown (s)</th><th>Points</th><th>Unlocked after</th></tr></thead><tbody>");
+            b.append("<h2>").append(T("Skills", "技")).append("</h2><div class=\"table\"><table><thead><tr><th>").append(T("Skill", "技")).append("</th><th>")
+                    .append(T("Description", "説明")).append("</th><th>").append(T("Attack", "攻撃力")).append("</th><th>").append(T("Cooldown (s)", "CD（秒）"))
+                    .append("</th><th>").append(T("Points", "ポイント")).append("</th><th>").append(T("Unlocked after", "前提の技")).append("</th></tr></thead><tbody>");
             for (Node n : skills) {
                 String note = lang("mhc.chat.message.note." + n.id);
                 String name = skillName(n.id);
                 String pre = n.pre.stream().map(p -> p == t.root ? "—" : skillName(p.id)).collect(Collectors.joining(", "));
-                String frame = n.frame.equals("GOAL") ? " <span class=\"tag goal\">Goal</span>" : n.frame.equals("CHALLENGE") ? " <span class=\"tag challenge\">Challenge</span>" : "";
+                String frame = n.frame.equals("GOAL") ? " <span class=\"tag goal\">" + T("Goal", "ゴール") + "</span>"
+                        : n.frame.equals("CHALLENGE") ? " <span class=\"tag challenge\">" + T("Challenge", "チャレンジ") + "</span>" : "";
                 b.append("<tr><td><strong>").append(esc(name)).append("</strong>").append(frame).append("</td><td>").append(esc(plain(note)))
                         .append("</td><td>").append(esc(atk(note))).append("</td><td>").append(esc(cd.of(n.id))).append("</td><td>")
                         .append(n.cost).append("</td><td>").append(esc(pre.isEmpty() ? "—" : pre)).append("</td></tr>");
             }
             b.append("</tbody></table></div>");
-            b.append("<h2>Skill tree</h2><p class=\"note\">Skills unlock in this order. Spend skill points in the skill tree screen (Quirk Note) to learn them.</p>");
+            b.append("<h2>").append(T("Skill tree", "スキルツリー")).append("</h2><p class=\"note\">")
+                    .append(T("Skills unlock in this order. Spend skill points in the skill tree screen (Quirk Note) to learn them.",
+                            "この順番で技を覚えられます。スキルツリーの画面（個性ノート）でスキルポイントを使って覚えます。")).append("</p>");
             b.append("<ul class=\"tree\">");
             for (Node c : t.root.children) if (!c.passive) treeItem(b, c, new HashSet<>());
             b.append("</ul>");
         }
         List<Npc> users = npcs.stream().filter(n -> n.quirks().contains(q)).toList();
         if (!users.isEmpty()) {
-            b.append("<h2>Characters with this quirk</h2><ul class=\"inline\">");
+            b.append("<h2>").append(T("Characters with this quirk", "この個性を持つキャラ")).append("</h2><ul class=\"inline\">");
             for (Npc n : users) b.append("<li><a href=\"../characters/").append(n.id()).append(".html\">").append(esc(label(n))).append("</a></li>");
             b.append("</ul>");
         }
-        String meta = k.name + " is a quirk in the My Hero Craft Minecraft mod" + (k.users.isEmpty() ? "" : " (used by " + k.users + ")") + ". "
+        String meta = L.equals("ja")
+                ? k.name + "は、マイクラ MOD「My Hero Craft」の個性です" + (k.users.isEmpty() ? "" : "（主な使用者：" + k.users + "）") + "。" + desc + "技・攻撃力・クールダウン・スキルツリーをまとめています。"
+                : k.name + " is a quirk in the My Hero Craft Minecraft mod" + (k.users.isEmpty() ? "" : " (used by " + k.users + ")") + ". "
                 + (desc.isEmpty() ? "" : desc + " ") + "Skills, attack power, cooldowns and skill tree.";
-        return layout(k.name + " (Quirk)", meta.length() > 300 ? meta.substring(0, 297) + "..." : meta, "quirks/" + q + ".html", b.toString(), 1);
+        return layout(k.name + T(" (Quirk)", "（個性）"), meta.length() > 300 ? meta.substring(0, 297) + "..." : meta, "quirks/" + q + ".html", b.toString(), 1);
     }
 
     static void treeItem(StringBuilder b, Node n, Set<Node> seen) {
@@ -775,7 +837,7 @@ public class WikiGen {
 
     static String skillName(String id) {
         String q = noFormat(lang("mhc.chat.message.quark." + id));
-        if (!q.isEmpty()) return q.replace("%s", "Target");
+        if (!q.isEmpty()) return q.replace("%s", T("Target", "相手"));
         String[] p = splitNote(lang("mhc.chat.message.note." + id));
         return p != null ? noFormat(p[0]) : titleCase(id);
     }
@@ -783,7 +845,9 @@ public class WikiGen {
     /** 同じ名前の別バージョン(student_midoriya_2 など)は番号を付けて見分ける。 */
     static String label(Npc n) {
         Matcher m = Pattern.compile("_(\\d+)$").matcher(n.id());
-        return m.find() ? n.name() + " (" + m.group(1) + ")" : n.name();
+        String name = noFormat(lang("entity.mhc." + n.id()));
+        if (name.isEmpty()) name = n.name();
+        return m.find() ? name + " (" + m.group(1) + ")" : name;
     }
 
     /** 陣営ごとの色(CSS のクラス)。 */
@@ -792,62 +856,66 @@ public class WikiGen {
     }
 
     static String charactersPage(List<Npc> npcs) {
-        StringBuilder b = new StringBuilder("<h1 class=\"title\">Characters</h1><p class=\"lead\">Heroes, U.A. students and villains that appear in My Hero Craft. "
-                + "Pick a character to see their quirk and stats.</p>");
+        StringBuilder b = new StringBuilder("<h1 class=\"title\">" + T("Characters", "キャラクター") + "</h1><p class=\"lead\">"
+                + T("Heroes, U.A. students and villains that appear in My Hero Craft. Pick a character to see their quirk and stats.",
+                "My Hero Craft に出てくるヒーロー・雄英生・ヴィランです。キャラを選ぶと、個性とステータスが見られます。") + "</p>");
         String grp = null;
         for (Npc n : npcs) {
             if (!n.group().equals(grp)) {
                 if (grp != null) b.append("</div>");
                 grp = n.group();
-                b.append("<h2 class=\"band ").append(side(grp)).append("\">").append(esc(grp)).append("</h2><div class=\"names\">");
+                b.append("<h2 class=\"band ").append(side(grp)).append("\">").append(esc(group(grp))).append("</h2><div class=\"names\">");
             }
             b.append("<a class=\"").append(side(n.group())).append("\" href=\"characters/").append(n.id()).append(".html\">").append(esc(label(n))).append("</a>");
         }
         if (grp != null) b.append("</div>");
-        b.append("<h2 class=\"band hero\">Shopkeepers</h2><div class=\"names\"><a class=\"student\" href=\"shops.html#hatsume\">Mei Hatsume</a><a class=\"hero\" href=\"shops.html#lunchrush\">Lunch Rush</a></div>");
-        return layout("Characters", "Heroes, U.A. students and villains in the My Hero Craft Minecraft mod.", "characters.html", b.toString(), 0);
+        b.append("<h2 class=\"band hero\">").append(T("Shopkeepers", "お店の人")).append("</h2><div class=\"names\"><a class=\"student\" href=\"shops.html#hatsume\">")
+                .append(T("Mei Hatsume", "発目明")).append("</a><a class=\"hero\" href=\"shops.html#lunchrush\">").append(T("Lunch Rush", "ランチラッシュ")).append("</a></div>");
+        return layout(T("Characters", "キャラクター"), T("Heroes, U.A. students and villains in the My Hero Craft Minecraft mod.",
+                "マイクラ MOD「My Hero Craft」に出てくるヒーロー・雄英生・ヴィランの一覧。"), "characters.html", b.toString(), 0);
     }
 
     static String charPage(Npc n, Map<String, Tree> trees) {
         String sd = side(n.group());
         StringBuilder b = new StringBuilder();
-        b.append("<p class=\"crumb\"><a href=\"../characters.html\">Characters</a> / ").append(esc(n.group())).append("</p>");
-        String quirks = n.quirks().stream().map(q -> q.equals("random") ? "Random" : trees.containsKey(q)
+        b.append("<p class=\"crumb\"><a href=\"../characters.html\">").append(T("Characters", "キャラクター")).append("</a> / ").append(esc(group(n.group()))).append("</p>");
+        String quirks = n.quirks().stream().map(q -> q.equals("random") ? T("Random", "ランダム") : trees.containsKey(q)
                 ? "<a href=\"../quirks/" + q + ".html\">" + esc(kosei(q).name()) + "</a>" : esc(kosei(q).name())).collect(Collectors.joining(" / "));
         // 名前の帯(ヒーローカード風)
-        b.append("<section class=\"profile ").append(sd).append("\"><span class=\"badge\">").append(esc(n.group())).append("</span>")
+        b.append("<section class=\"profile ").append(sd).append("\"><span class=\"badge\">").append(esc(group(n.group()))).append("</span>")
                 .append("<h1>").append(esc(label(n))).append("</h1>")
-                .append("<p class=\"quirk\"><span>QUIRK</span>").append(quirks).append("</p>");
+                .append("<p class=\"quirk\"><span>").append(T("QUIRK", "個性")).append("</span>").append(quirks).append("</p>");
         if (n.stats() != null) {
             int total = Arrays.stream(n.stats()).sum();
-            b.append("<div class=\"score\"><b>").append(total).append("</b><span>TOTAL</span></div>");
+            b.append("<div class=\"score\"><b>").append(total).append("</b><span>").append(T("TOTAL", "合計")).append("</span></div>");
         }
         b.append("</section>");
-        String[] labels = {"Health", "Strength", "Dexterity", "Defense", "Quirk"};
+        String[] labels = L.equals("ja") ? new String[]{"体力", "筋力", "器用さ", "防御", "個性"} : new String[]{"Health", "Strength", "Dexterity", "Defense", "Quirk"};
         if (n.stats() != null) {
-            b.append("<div class=\"statgrid\"><div class=\"panel\"><h2>Stats</h2>").append(radar(n.stats(), labels)).append("</div>");
-            b.append("<div class=\"panel\"><h2>Details</h2><div class=\"bars\">");
+            b.append("<div class=\"statgrid\"><div class=\"panel\"><h2>").append(T("Stats", "ステータス")).append("</h2>").append(radar(n.stats(), labels)).append("</div>");
+            b.append("<div class=\"panel\"><h2>").append(T("Details", "くわしく")).append("</h2><div class=\"bars\">");
             for (int i = 0; i < 5; i++) {
                 int v = n.stats()[i];
                 b.append("<div class=\"bar\"><span>").append(labels[i]).append("</span><div><i style=\"width:").append(Math.min(100, v * 5)).append("%\"></i></div><b>").append(v).append("</b></div>");
             }
-            b.append("</div><p class=\"note\">Each stat goes up to 20.</p><div class=\"reward\"><b>")
+            b.append("</div><p class=\"note\">").append(T("Each stat goes up to 20.", "どのステータスも最大は20です。")).append("</p><div class=\"reward\"><b>")
                     .append(Math.max(1, Math.round(Arrays.stream(n.stats()).sum() / 4.0)))
-                    .append("</b><span>skill points for defeating this character alone</span></div></div></div>");
+                    .append("</b><span>").append(T("skill points for defeating this character alone", "スキルポイント（1人で倒した時）")).append("</span></div></div></div>");
         } else if (n.quirks().contains("random")) {
-            b.append("<div class=\"panel\"><h2>Stats</h2><p>Each stat is random from 0 to 4, and the quirk is random too.</p>"
-                    + "<div class=\"reward\"><b>2–5</b><span>skill points for defeating one alone (about 2–3 on average)</span></div></div>");
+            b.append("<div class=\"panel\"><h2>").append(T("Stats", "ステータス")).append("</h2><p>")
+                    .append(T("Each stat is random from 0 to 4, and the quirk is random too.", "ステータスはそれぞれ0〜4のランダムで、個性もランダムです。")).append("</p>")
+                    .append("<div class=\"reward\"><b>2–5</b><span>").append(T("skill points for defeating one alone (about 2–3 on average)", "スキルポイント（1人で倒した時。平均2〜3くらい）")).append("</span></div></div>");
         } else {
-            b.append("<div class=\"panel\"><h2>Stats</h2><p>Quirk level ").append(n.level()).append(".</p></div>");
+            b.append("<div class=\"panel\"><h2>").append(T("Stats", "ステータス")).append("</h2><p>").append(T("Quirk level ", "個性 Lv ")).append(n.level()).append(T(".", "")).append("</p></div>");
         }
-        return layout(label(n) + " (Character)", n.name() + " in the My Hero Craft Minecraft mod: quirk and stats.",
-                "characters/" + n.id() + ".html", b.toString(), 1);
+        return layout(label(n) + T(" (Character)", "（キャラクター）"), L.equals("ja") ? label(n) + "（マイクラ MOD「My Hero Craft」）の個性とステータス。"
+                : n.name() + " in the My Hero Craft Minecraft mod: quirk and stats.", "characters/" + n.id() + ".html", b.toString(), 1);
     }
 
     /** 5つのステータスのレーダーチャート(SVG)。最大20。 */
     static String radar(int[] v, String[] labels) {
         double cx = 150, cy = 140, r = 100;
-        StringBuilder s = new StringBuilder("<svg class=\"radar\" viewBox=\"0 0 300 290\" role=\"img\" aria-label=\"Stats chart\">");
+        StringBuilder s = new StringBuilder("<svg class=\"radar\" viewBox=\"0 0 300 290\" role=\"img\" aria-label=\"" + T("Stats chart", "ステータスのグラフ") + "\">");
         for (int ring = 1; ring <= 4; ring++) {
             StringBuilder pts = new StringBuilder();
             for (int i = 0; i < 5; i++) {
@@ -875,55 +943,71 @@ public class WikiGen {
     }
 
     static String slotName(String s) {
-        return switch (s) { case "HELMET" -> "Head"; case "CHESTPLATE" -> "Body"; case "LEGGINGS" -> "Legs"; default -> "Feet"; };
+        return switch (s) {
+            case "HELMET" -> T("Head", "頭");
+            case "CHESTPLATE" -> T("Body", "胴");
+            case "LEGGINGS" -> T("Legs", "脚");
+            default -> T("Feet", "足");
+        };
     }
 
     static String priceTable(Map<String, Integer> slotCost) {
-        StringBuilder b = new StringBuilder("<div class=\"table\"><table><thead><tr><th>Piece</th><th>Emeralds</th></tr></thead><tbody>");
+        StringBuilder b = new StringBuilder("<div class=\"table\"><table><thead><tr><th>" + T("Piece", "部位") + "</th><th>" + T("Emeralds", "エメラルド") + "</th></tr></thead><tbody>");
         for (var e : slotCost.entrySet()) b.append("<tr><td>").append(slotName(e.getKey())).append("</td><td><b>").append(e.getValue()).append("</b></td></tr>");
         return b.append("</tbody></table></div>").toString();
     }
 
     static String supportTable(List<String[]> support) {
-        StringBuilder b = new StringBuilder("<div class=\"table\"><table><thead><tr><th>Item</th><th>Emeralds</th></tr></thead><tbody>");
+        StringBuilder b = new StringBuilder("<div class=\"table\"><table><thead><tr><th>" + T("Item", "アイテム") + "</th><th>" + T("Emeralds", "エメラルド") + "</th></tr></thead><tbody>");
         for (String[] s : support) b.append("<tr><td><strong>").append(esc(itemName(s[0]))).append("</strong></td><td><b>").append(s[1]).append("</b></td></tr>");
         return b.append("</tbody></table></div>").toString();
     }
 
+    static String li(String en, String ja) { return "<li>" + T(en, ja) + "</li>"; }
+
     static String shopsPage(List<String[]> support, Map<String, Integer> slotCost, int appCost, int tubeCost) {
         String phone = support.stream().filter(s -> s[0].equals("smartphone")).map(s -> s[1]).findFirst().orElse("?");
-        StringBuilder b = new StringBuilder("<h1 class=\"title\">Shops</h1><p class=\"lead\">Two characters run shops in villages. Pay with emeralds.</p>");
-        b.append("<section id=\"hatsume\" class=\"profile student\"><span class=\"badge\">Support Workshop</span><h1>Mei Hatsume</h1>")
-                .append("<p class=\"quirk\"><span>WHERE</span>Villages</p></section>");
-        b.append("<div class=\"statgrid\"><div class=\"panel\"><h2>How to use</h2><ul>")
-                .append("<li>Mei Hatsume appears in villages and stays there even when you leave.</li>")
-                .append("<li><b>Right-click</b> her to open <b>Hatsume's Support Workshop</b> (sneaking does a normal interaction).</li>")
-                .append("<li>The workshop has two tabs: <b>Costumes</b> and <b>Support</b> items. Pay with emeralds from your inventory.</li>")
-                .append("<li>Right-click her while holding a <a href=\"smartphone.html\">Smartphone</a> to open <b>Hatsume's App Store</b>.</li>")
-                .append("</ul></div><div class=\"panel\"><h2>Costume prices</h2>").append(priceTable(slotCost))
-                .append("<p class=\"note\">Every costume piece costs the same. See all costumes on the <a href=\"items.html#costumes\">Items</a> page.</p></div></div>");
-        b.append("<div class=\"statgrid\"><div class=\"panel\"><h2>Support items</h2>").append(supportTable(support)).append("</div>")
-                .append("<div class=\"panel\"><h2>App Store</h2><p>Install apps on the smartphone in your hand.</p>")
-                .append("<div class=\"reward\"><b>").append(appCost).append("</b><span>emeralds per app (HeroTube: ").append(tubeCost).append(")</span></div>")
-                .append("<p class=\"note\">In Creative mode, apps are free. The smartphone itself costs ").append(phone).append(" emeralds.</p></div></div>");
-        b.append("<section id=\"lunchrush\" class=\"profile hero\" style=\"margin-top:36px\"><span class=\"badge\">Cafeteria</span><h1>Lunch Rush</h1>")
-                .append("<p class=\"quirk\"><span>WHERE</span>Villages</p></section>");
-        b.append("<div class=\"statgrid\"><div class=\"panel\"><h2>How to use</h2><ul>")
-                .append("<li>Lunch Rush appears in villages and stays there even when you leave.</li>")
-                .append("<li><b>Right-click</b> him to open <b>Lunch Rush's Cafeteria</b>.</li>")
-                .append("<li>He can cook <b>any food</b>, including food from other mods. The menu has three tabs: U.A. Specials, Classics and Others.</li>")
-                .append("<li>Choose how many you want. Hold <kbd>Shift</kbd> to change the amount by 8.</li>")
-                .append("</ul></div><div class=\"panel\"><h2>Prices</h2>")
-                .append("<div class=\"reward\"><b>1 : 1</b><span>one emerald for each hunger point the food restores</span></div>")
-                .append("<ul><li>Golden Apple: <b>30</b> emeralds</li><li>Not on the menu: Food Set, Blood Collection Container, Enchanted Golden Apple</li></ul></div></div>");
-        return layout("Shops", "Mei Hatsume's Support Workshop and Lunch Rush's Cafeteria in the My Hero Craft Minecraft mod: what they sell and for how many emeralds.", "shops.html", b.toString(), 0);
+        StringBuilder b = new StringBuilder("<h1 class=\"title\">" + T("Shops", "お店") + "</h1><p class=\"lead\">"
+                + T("Two characters run shops in villages. Pay with emeralds.", "村には、お店をやっているキャラが2人います。支払いはエメラルドです。") + "</p>");
+        b.append("<section id=\"hatsume\" class=\"profile student\"><span class=\"badge\">").append(T("Support Workshop", "サポート工房")).append("</span><h1>")
+                .append(T("Mei Hatsume", "発目明")).append("</h1><p class=\"quirk\"><span>").append(T("WHERE", "場所")).append("</span>").append(T("Villages", "村")).append("</p></section>");
+        b.append("<div class=\"statgrid\"><div class=\"panel\"><h2>").append(T("How to use", "使い方")).append("</h2><ul>")
+                .append(li("Mei Hatsume appears in villages and stays there even when you leave.", "発目明は村に出てきます。離れても消えません。"))
+                .append(li("<b>Right-click</b> her to open <b>Hatsume's Support Workshop</b> (sneaking does a normal interaction).", "<b>右クリック</b>すると<b>発目のサポート工房</b>が開きます（しゃがんでいる時はふつうの右クリックです）。"))
+                .append(li("The workshop has two tabs: <b>Costumes</b> and <b>Support</b> items. Pay with emeralds from your inventory.", "工房には<b>コスチューム</b>と<b>サポートアイテム</b>の2つのタブがあります。持っているエメラルドで払います。"))
+                .append(li("Right-click her while holding a <a href=\"smartphone.html\">Smartphone</a> to open <b>Hatsume's App Store</b>.", "<a href=\"smartphone.html\">スマホ</a>を持って右クリックすると<b>発目のアプリストア</b>が開きます。"))
+                .append("</ul></div><div class=\"panel\"><h2>").append(T("Costume prices", "コスチュームの値段")).append("</h2>").append(priceTable(slotCost))
+                .append("<p class=\"note\">").append(T("Every costume piece costs the same. See all costumes on the <a href=\"items.html#costumes\">Items</a> page.",
+                        "どのコスチュームも、部位ごとの値段は同じです。全部のコスチュームは<a href=\"items.html#costumes\">アイテム</a>のページにあります。")).append("</p></div></div>");
+        b.append("<div class=\"statgrid\"><div class=\"panel\"><h2>").append(T("Support items", "サポートアイテム")).append("</h2>").append(supportTable(support)).append("</div>")
+                .append("<div class=\"panel\"><h2>").append(T("App Store", "アプリストア")).append("</h2><p>").append(T("Install apps on the smartphone in your hand.", "手に持っているスマホにアプリを入れます。")).append("</p>")
+                .append("<div class=\"reward\"><b>").append(appCost).append("</b><span>").append(T("emeralds per app (HeroTube: " + tubeCost + ")", "エメラルド（アプリ1つ。HeroTube は " + tubeCost + "）")).append("</span></div>")
+                .append("<p class=\"note\">").append(T("In Creative mode, apps are free. The smartphone itself costs " + phone + " emeralds.",
+                        "クリエイティブではアプリは無料です。スマホ本体は " + phone + " エメラルドです。")).append("</p></div></div>");
+        b.append("<section id=\"lunchrush\" class=\"profile hero\" style=\"margin-top:36px\"><span class=\"badge\">").append(T("Cafeteria", "食堂")).append("</span><h1>")
+                .append(T("Lunch Rush", "ランチラッシュ")).append("</h1><p class=\"quirk\"><span>").append(T("WHERE", "場所")).append("</span>").append(T("Villages", "村")).append("</p></section>");
+        b.append("<div class=\"statgrid\"><div class=\"panel\"><h2>").append(T("How to use", "使い方")).append("</h2><ul>")
+                .append(li("Lunch Rush appears in villages and stays there even when you leave.", "ランチラッシュは村に出てきます。離れても消えません。"))
+                .append(li("<b>Right-click</b> him to open <b>Lunch Rush's Cafeteria</b>.", "<b>右クリック</b>すると<b>ランチラッシュの食堂</b>が開きます。"))
+                .append(li("He can cook <b>any food</b>, including food from other mods. The menu has three tabs: U.A. Specials, Classics and Others.",
+                        "<b>どんな食べ物でも</b>作ってくれます（ほかの MOD の食べ物も）。メニューは「雄英の定番」「いつもの」「そのほか」の3つのタブです。"))
+                .append(li("Choose how many you want. Hold <kbd>Shift</kbd> to change the amount by 8.", "数を選んで注文します。<kbd>Shift</kbd> を押しながらだと8個ずつ変わります。"))
+                .append("</ul></div><div class=\"panel\"><h2>").append(T("Prices", "値段")).append("</h2>")
+                .append("<div class=\"reward\"><b>1 : 1</b><span>").append(T("one emerald for each hunger point the food restores", "回復する満腹度1につき、エメラルド1つ")).append("</span></div>")
+                .append("<ul>").append(li("Golden Apple: <b>30</b> emeralds", "金のリンゴ：<b>30</b> エメラルド"))
+                .append(li("Not on the menu: Food Set, Blood Collection Container, Enchanted Golden Apple", "作れない物：再現用食料セット、血液保管瓶、エンチャントされた金のリンゴ"))
+                .append("</ul></div></div>");
+        return layout(T("Shops", "お店"), T("Mei Hatsume's Support Workshop and Lunch Rush's Cafeteria in the My Hero Craft Minecraft mod: what they sell and for how many emeralds.",
+                "マイクラ MOD「My Hero Craft」の発目明のサポート工房と、ランチラッシュの食堂。売っている物とエメラルドの値段。"), "shops.html", b.toString(), 0);
     }
 
     static String itemsPage(List<String[]> support, List<String[]> costumes, Map<String, Integer> slotCost) {
-        StringBuilder b = new StringBuilder("<h1 class=\"title\">Items</h1><p class=\"lead\">Support items and costumes. All of them are made at <a href=\"shops.html#hatsume\">Mei Hatsume's Support Workshop</a> with emeralds.</p>");
-        b.append("<h2 class=\"band hero\" id=\"support\">Support items</h2>").append(supportTable(support));
-        b.append("<h2 class=\"band student\" id=\"costumes\">Costumes</h2><p class=\"note\">Prices per piece: ")
-                .append(slotCost.entrySet().stream().map(e -> slotName(e.getKey()) + " " + e.getValue()).collect(Collectors.joining(" / "))).append(" emeralds.</p>");
+        StringBuilder b = new StringBuilder("<h1 class=\"title\">" + T("Items", "アイテム") + "</h1><p class=\"lead\">"
+                + T("Support items and costumes. All of them are made at <a href=\"shops.html#hatsume\">Mei Hatsume's Support Workshop</a> with emeralds.",
+                "サポートアイテムとコスチュームです。どれも<a href=\"shops.html#hatsume\">発目明のサポート工房</a>でエメラルドを払って作ってもらえます。") + "</p>");
+        b.append("<h2 class=\"band hero\" id=\"support\">").append(T("Support items", "サポートアイテム")).append("</h2>").append(supportTable(support));
+        b.append("<h2 class=\"band student\" id=\"costumes\">").append(T("Costumes", "コスチューム")).append("</h2><p class=\"note\">").append(T("Prices per piece: ", "部位ごとの値段："))
+                .append(slotCost.entrySet().stream().map(e -> slotName(e.getKey()) + " " + e.getValue()).collect(Collectors.joining(" / "))).append(T(" emeralds.", " エメラルド")).append("</p>");
         Map<String, List<String>> sets = new LinkedHashMap<>();
         for (String[] c : costumes) {
             String n = itemName(c[0]);
@@ -936,31 +1020,40 @@ public class WikiGen {
             b.append("<div class=\"item\"><strong>").append(esc(e.getKey())).append("</strong><span class=\"desc\">")
                     .append(String.join(" · ", e.getValue())).append("</span></div>");
         b.append("</div>");
-        return layout("Items", "Support items and costumes in the My Hero Craft Minecraft mod, with their emerald prices.", "items.html", b.toString(), 0);
+        return layout(T("Items", "アイテム"), T("Support items and costumes in the My Hero Craft Minecraft mod, with their emerald prices.",
+                "マイクラ MOD「My Hero Craft」のサポートアイテムとコスチューム。エメラルドの値段つき。"), "items.html", b.toString(), 0);
     }
 
     static String phonePage(List<String> apps, int appCost, int tubeCost, Map<String, List<String[]>> channels, List<String[]> support) {
         String phone = support.stream().filter(s -> s[0].equals("smartphone")).map(s -> s[1]).findFirst().orElse("?");
-        StringBuilder b = new StringBuilder("<h1 class=\"title\">Smartphone</h1><p class=\"lead\">Run a hero agency or villain group, call your allies and learn new moves from HeroTube.</p>");
-        b.append("<div class=\"statgrid\"><div class=\"panel\"><h2>Getting one</h2><div class=\"reward\"><b>").append(phone)
-                .append("</b><span>emeralds at <a href=\"shops.html#hatsume\">Mei Hatsume's workshop</a> (Support tab)</span></div>")
-                .append("<p><b>Right-click</b> with the smartphone to open it. The <b>Agency</b> app is installed from the start. Other apps are bought from Hatsume's App Store.</p></div>")
-                .append("<div class=\"panel\"><h2>Agency / Villain group</h2><ul>")
-                .append("<li>Create a <b>Hero Agency</b> (hero side) or a <b>Villain Group</b> (villain side) and give it a name.</li>")
-                .append("<li>To invite a player, both of you hold a smartphone and you right-click them.</li>")
-                .append("<li>To recruit a character as an ally, right-click an ally-side character that is under <b>10% health</b> with the smartphone.</li>")
-                .append("<li>Allies can be told to <b>Follow</b> or <b>Stay</b>. Leaders can kick members or disband the group.</li></ul></div></div>");
-        b.append("<h2 class=\"band hero\">Apps</h2><div class=\"table\"><table><thead><tr><th>App</th><th>What it does</th><th>Emeralds</th></tr></thead><tbody>")
-                .append("<tr><td><strong>").append(esc(noFormat(lang("gui.mhc.phone.app.office")))).append("</strong></td><td>Create or manage your agency or group, members and allies.</td><td>Free</td></tr>");
+        StringBuilder b = new StringBuilder("<h1 class=\"title\">" + T("Smartphone", "スマホ") + "</h1><p class=\"lead\">"
+                + T("Run a hero agency or villain group, call your allies and learn new moves from HeroTube.", "ヒーロー事務所やヴィラングループを作ったり、仲間を呼んだり、HeroTube で新しい技を覚えたりできます。") + "</p>");
+        b.append("<div class=\"statgrid\"><div class=\"panel\"><h2>").append(T("Getting one", "手に入れ方")).append("</h2><div class=\"reward\"><b>").append(phone)
+                .append("</b><span>").append(T("emeralds at <a href=\"shops.html#hatsume\">Mei Hatsume's workshop</a> (Support tab)", "エメラルド（<a href=\"shops.html#hatsume\">発目の工房</a>のサポートアイテムのタブ）")).append("</span></div><p>")
+                .append(T("<b>Right-click</b> with the smartphone to open it. The <b>Agency</b> app is installed from the start. Other apps are bought from Hatsume's App Store.",
+                        "スマホを持って<b>右クリック</b>すると開きます。<b>事務所</b>のアプリは最初から入っています。ほかのアプリは発目のアプリストアで買います。")).append("</p></div>")
+                .append("<div class=\"panel\"><h2>").append(T("Agency / Villain group", "事務所 / ヴィラングループ")).append("</h2><ul>")
+                .append(li("Create a <b>Hero Agency</b> (hero side) or a <b>Villain Group</b> (villain side) and give it a name.", "<b>ヒーロー事務所</b>（ヒーロー側）か<b>ヴィラングループ</b>（ヴィラン側）を、名前を付けて作れます。"))
+                .append(li("To invite a player, both of you hold a smartphone and you right-click them.", "プレイヤーを誘う時は、2人ともスマホを持って、相手を右クリックします。"))
+                .append(li("To recruit a character as an ally, right-click an ally-side character that is under <b>10% health</b> with the smartphone.", "キャラを仲間にする時は、体力が <b>10% より少ない</b>味方側のキャラを、スマホで右クリックします。"))
+                .append(li("Allies can be told to <b>Follow</b> or <b>Stay</b>. Leaders can kick members or disband the group.", "仲間には<b>ついてくる</b>か<b>待つ</b>かを指示できます。リーダーはメンバーを外したり、解散したりできます。"))
+                .append("</ul></div></div>");
+        b.append("<h2 class=\"band hero\">").append(T("Apps", "アプリ")).append("</h2><div class=\"table\"><table><thead><tr><th>").append(T("App", "アプリ")).append("</th><th>")
+                .append(T("What it does", "できること")).append("</th><th>").append(T("Emeralds", "エメラルド")).append("</th></tr></thead><tbody>")
+                .append("<tr><td><strong>").append(esc(noFormat(lang("gui.mhc.phone.app.office")))).append("</strong></td><td>")
+                .append(T("Create or manage your agency or group, members and allies.", "事務所やグループ・メンバー・仲間を作ったり、まとめたりします。")).append("</td><td>").append(T("Free", "無料")).append("</td></tr>");
         for (String a : apps)
             b.append("<tr><td><strong>").append(esc(noFormat(lang("gui.mhc.phone.app." + a)))).append("</strong></td><td>")
                     .append(esc(noFormat(lang("gui.mhc.phone.desc." + a)))).append("</td><td><b>").append(a.equals("herotube") ? tubeCost : appCost).append("</b></td></tr>");
         b.append("</tbody></table></div>");
-        b.append("<h2 class=\"band student\" id=\"herotube\">HeroTube</h2><p>Watch videos to learn moves. Each video costs <b>skill points</b> (free in Creative mode). "
-                + "Capture Scarf moves need Aizawa's costume (body) and syringe moves need Himiko Toga's costume Ver2 (body) to be used.</p>");
+        b.append("<h2 class=\"band student\" id=\"herotube\">HeroTube</h2><p>").append(T("Watch videos to learn moves. Each video costs <b>skill points</b> (free in Creative mode). "
+                + "Capture Scarf moves need Aizawa's costume (body) and syringe moves need Himiko Toga's costume Ver2 (body) to be used.",
+                "動画を見ると技を覚えられます。動画ごとに<b>スキルポイント</b>が要ります（クリエイティブでは無料）。"
+                + "捕縛布の技は相澤のコスチューム（胴）、注射器の技はトガヒミコのコスチューム Ver2（胴）を着ている時だけ使えます。")).append("</p>");
         for (var c : channels.entrySet()) {
             String cn = noFormat(lang("gui.mhc.herotube.channel." + c.getKey()));
-            b.append("<h2>").append(esc(cn.isEmpty() ? titleCase(c.getKey()) : cn)).append("</h2><div class=\"table\"><table><thead><tr><th>Video</th><th>Move</th><th>Points</th></tr></thead><tbody>");
+            b.append("<h2>").append(esc(cn.isEmpty() ? titleCase(c.getKey()) : cn)).append("</h2><div class=\"table\"><table><thead><tr><th>").append(T("Video", "動画"))
+                    .append("</th><th>").append(T("Move", "覚える技")).append("</th><th>").append(T("Points", "ポイント")).append("</th></tr></thead><tbody>");
             for (String[] v : c.getValue()) {
                 String title = noFormat(lang("gui.mhc.herotube.video." + v[0]));
                 b.append("<tr><td>").append(esc(title.isEmpty() ? skillName(v[0]) : title)).append("</td><td>").append(esc(skillName(v[0])))
@@ -968,40 +1061,53 @@ public class WikiGen {
             }
             b.append("</tbody></table></div>");
         }
-        return layout("Smartphone", "The smartphone in the My Hero Craft Minecraft mod: hero agencies, villain groups, allies, apps and HeroTube moves.", "smartphone.html", b.toString(), 0);
+        return layout(T("Smartphone", "スマホ"), T("The smartphone in the My Hero Craft Minecraft mod: hero agencies, villain groups, allies, apps and HeroTube moves.",
+                "マイクラ MOD「My Hero Craft」のスマホ。ヒーロー事務所・ヴィラングループ・仲間・アプリ・HeroTube の技。"), "smartphone.html", b.toString(), 0);
     }
 
     static String guidePage() {
-        String main = "<h1>Guide</h1>"
-                + "<h2 id=\"controls\">Controls</h2><div class=\"table\"><table><thead><tr><th>Key</th><th>Action</th></tr></thead><tbody>"
-                + row("H", "Toggle Hero Mode. Most quirk skills are used in Hero Mode.")
-                + row("Left click", "Use the selected skill (hold to charge skills that can be charged).")
-                + row("R / mouse wheel", "Switch the selected skill.")
-                + row("1 – 9 (Hero Mode)", "Select the skill in that slot directly.")
-                + row("C (Hero Mode)", "Blink in the direction you are moving. 10 second cooldown, shown above the hunger bar.")
-                + row("N", "Open the Quirk Note (skill tree).")
-                + row("K", "Open the status screen to spend status points.")
-                + row("Shift twice", "Triggers some passives (for example climbing). Only works while a skill of that quirk is selected.")
-                + "</tbody></table></div><p class=\"note\">All keys can be changed in Options → Controls → Key Binds.</p>"
-                + "<h2 id=\"modes\">Hero and Villain worlds</h2><p>Each player is either on the hero side or the villain side, decided the first time they join a world "
-                + "(the <code>mhcVillainMode</code> game rule decides it for new players). Defeating characters of the other side gives skill points.</p>"
-                + "<h2 id=\"points\">Skill points</h2><p>When you defeat a hero or villain of the other side, every player who damaged it gets skill points:</p>"
-                + "<p class=\"formula\">points = (sum of the enemy's 5 stats) ÷ 4 × (your damage ÷ enemy max health) × config multiplier</p>"
-                + "<p>You always get at least 1 point if you dealt damage. For example, defeating Sir Nighteye alone gives about 20 points, and a random villain gives about 2–3 (up to 5). "
-                + "In Creative mode, points are unlimited.</p>"
-                + "<h2 id=\"tree\">Skill tree</h2><p>Open the Quirk Note to see your quirk's skill tree. Passives are unlocked from the start. "
-                + "Each skill costs points and needs the skill before it. Skills marked <span class=\"tag goal\">Goal</span> or <span class=\"tag challenge\">Challenge</span> are the strongest ones.</p>"
-                + "<h2 id=\"cooldowns\">Cooldowns</h2><p>After you use a skill it has a cooldown and cannot be used again until it ends. Cooldowns reset when you respawn.</p>"
-                + "<h2 id=\"config\">Config (mhc-common.toml)</h2><div class=\"table\"><table><thead><tr><th>Option</th><th>Default</th><th>What it does</th></tr></thead><tbody>"
-                + row3("Kosei", "false", "Ignore the activation conditions of certain quirks.")
-                + row3("ParadeMaxGeneration", "7", "How many generations of clones Sad Man's Parade can make.")
-                + row3("Monster / Villain / Hero", "false / true / true", "Whether vanilla monsters, villains and heroes spawn.")
-                + row3("Flash / Distortion / Shake / Chromatic", "true", "Screen effects of big skills.")
-                + row3("Exp", "1.0", "Experience multiplier when defeating villains.")
-                + row3("Points", "1.0", "Skill point multiplier when defeating characters of the other side.")
-                + row3("FriendlyFire", "false", "Whether skills can hurt allies.")
+        String main = "<h1>" + T("Guide", "ガイド") + "</h1>"
+                + "<h2 id=\"controls\">" + T("Controls", "操作") + "</h2><div class=\"table\"><table><thead><tr><th>" + T("Key", "キー") + "</th><th>" + T("Action", "できること") + "</th></tr></thead><tbody>"
+                + row("H", T("Toggle Hero Mode. Most quirk skills are used in Hero Mode.", "ヒーローモードのオン・オフ。個性の技はほとんどヒーローモードで使います。"))
+                + row(T("Left click", "左クリック"), T("Use the selected skill (hold to charge skills that can be charged).", "選んでいる技を使う（溜められる技は長押しで溜める）。"))
+                + row(T("R / mouse wheel", "R / マウスホイール"), T("Switch the selected skill.", "使う技を切り替える。"))
+                + row(T("1 – 9 (Hero Mode)", "1〜9（ヒーローモード中）"), T("Select the skill in that slot directly.", "その番号の技を直接選ぶ。"))
+                + row(T("C (Hero Mode)", "C（ヒーローモード中）"), T("Blink in the direction you are moving. 10 second cooldown, shown above the hunger bar.", "動いている方向へブリンクする。CD は10秒で、満腹度ゲージの上に出る。"))
+                + row("N", T("Open the Quirk Note (skill tree).", "個性ノート（スキルツリー）を開く。"))
+                + row("K", T("Open the status screen to spend status points.", "ステータス画面を開いて、ステータスポイントを振る。"))
+                + row(T("Shift twice", "Shift を2回"), T("Triggers some passives (for example climbing). Only works while a skill of that quirk is selected.", "一部のパッシブを使う（壁登りなど）。その個性の技を選んでいる時だけ。"))
+                + "</tbody></table></div><p class=\"note\">" + T("All keys can be changed in Options → Controls → Key Binds.", "キーは「設定 → 操作設定 → キー割り当て」で変えられます。") + "</p>"
+                + "<h2 id=\"modes\">" + T("Hero and Villain worlds", "ヒーローとヴィラン") + "</h2><p>"
+                + T("Each player is either on the hero side or the villain side, decided the first time they join a world "
+                + "(the <code>mhcVillainMode</code> game rule decides it for new players). Defeating characters of the other side gives skill points.",
+                "プレイヤーはヒーロー側かヴィラン側のどちらかで、ワールドに初めて入った時に決まります（新しく入る人は、ゲームルール <code>mhcVillainMode</code> で決まります）。"
+                + "反対側のキャラを倒すと、スキルポイントがもらえます。") + "</p>"
+                + "<h2 id=\"points\">" + T("Skill points", "スキルポイント") + "</h2><p>" + T("When you defeat a hero or villain of the other side, every player who damaged it gets skill points:",
+                "反対側のヒーローやヴィランを倒すと、ダメージを与えた全員がスキルポイントをもらえます。") + "</p>"
+                + "<p class=\"formula\">" + T("points = (sum of the enemy's 5 stats) ÷ 4 × (your damage ÷ enemy max health) × config multiplier",
+                "ポイント ＝ 相手の5つのステータスの合計 ÷ 4 × （与えたダメージ ÷ 相手の最大体力） × 設定の倍率") + "</p>"
+                + "<p>" + T("You always get at least 1 point if you dealt damage. For example, defeating Sir Nighteye alone gives about 20 points, and a random villain gives about 2–3 (up to 5). "
+                + "In Creative mode, points are unlimited.",
+                "ダメージを与えていれば、最低でも1ポイントもらえます。たとえばサー・ナイトアイを1人で倒すと約20ポイント、モブのヴィランなら約2〜3ポイント（最大5）です。"
+                + "クリエイティブでは、ポイントは無限です。") + "</p>"
+                + "<h2 id=\"tree\">" + T("Skill tree", "スキルツリー") + "</h2><p>" + T("Open the Quirk Note to see your quirk's skill tree. Passives are unlocked from the start. "
+                + "Each skill costs points and needs the skill before it. Skills marked <span class=\"tag goal\">Goal</span> or <span class=\"tag challenge\">Challenge</span> are the strongest ones.",
+                "個性ノートを開くと、自分の個性のスキルツリーが見られます。パッシブは最初から使えます。"
+                + "技を覚えるにはポイントと、その前の技が必要です。<span class=\"tag goal\">ゴール</span>や<span class=\"tag challenge\">チャレンジ</span>の印の技が、強い技です。") + "</p>"
+                + "<h2 id=\"cooldowns\">" + T("Cooldowns", "クールダウン") + "</h2><p>" + T("After you use a skill it has a cooldown and cannot be used again until it ends. Cooldowns reset when you respawn.",
+                "技を使うとクールダウン（CD）が付き、終わるまでは同じ技を使えません。死んで復活すると、CD は全部なくなります。") + "</p>"
+                + "<h2 id=\"config\">" + T("Config (mhc-common.toml)", "設定ファイル（mhc-common.toml）") + "</h2><div class=\"table\"><table><thead><tr><th>" + T("Option", "項目")
+                + "</th><th>" + T("Default", "最初の値") + "</th><th>" + T("What it does", "内容") + "</th></tr></thead><tbody>"
+                + row3("Kosei", "false", T("Ignore the activation conditions of certain quirks.", "一部の個性の発動条件を無視する。"))
+                + row3("ParadeMaxGeneration", "7", T("How many generations of clones Sad Man's Parade can make.", "サッドマンズパレードで分身の分身を作れる世代の上限。"))
+                + row3("Monster / Villain / Hero", "false / true / true", T("Whether vanilla monsters, villains and heroes spawn.", "モンスター・ヴィラン・ヒーローがスポーンするか。"))
+                + row3("Flash / Distortion / Shake / Chromatic", "true", T("Screen effects of big skills.", "大技の画面の演出（閃光・ゆがみ・揺れ・色収差）。"))
+                + row3("Exp", "1.0", T("Experience multiplier when defeating villains.", "ヴィランを倒した時の経験値の倍率。"))
+                + row3("Points", "1.0", T("Skill point multiplier when defeating characters of the other side.", "反対側のキャラを倒した時のスキルポイントの倍率。"))
+                + row3("FriendlyFire", "false", T("Whether skills can hurt allies.", "味方にも技が当たるか。"))
                 + "</tbody></table></div>";
-        return layout("Guide", "How to play My Hero Craft: controls, Hero Mode, blink, skill points, skill tree, cooldowns and config options.", "guide.html", main, 0);
+        return layout(T("Guide", "ガイド"), T("How to play My Hero Craft: controls, Hero Mode, blink, skill points, skill tree, cooldowns and config options.",
+                "マイクラ MOD「My Hero Craft」の遊び方。操作・ヒーローモード・ブリンク・スキルポイント・スキルツリー・クールダウン・設定。"), "guide.html", main, 0);
     }
 
     static String row(String a, String b) { return "<tr><td><kbd>" + esc(a) + "</kbd></td><td>" + esc(b) + "</td></tr>"; }
@@ -1140,7 +1246,7 @@ public class WikiGen {
             :root{--paper:#fbf7ec;--panel:#ffffff;--ink:#16181d;--muted:#5d6270;--line:#16181d;--soft:#e6e1d3;
               --hero:#1d9a5b;--gold:#ffcc1f;--red:#e0353b;--navy:#1b2a5c;--villain:#6b2d8f;--student:#1d9a5b;--pro:#e0a100}
             *{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
-            body{margin:0;color:var(--ink);font:16px/1.65 "Noto Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+            body{margin:0;color:var(--ink);font:16px/1.65 "Noto Sans","Noto Sans JP",system-ui,-apple-system,"Segoe UI",sans-serif;
               background:var(--paper) radial-gradient(rgba(22,24,29,.07) 1px,transparent 1.2px) 0 0/14px 14px}
             a{color:var(--hero);font-weight:600}.wrap{max-width:1100px;margin:0 auto;padding:0 16px}
             .top{background:var(--navy);border-bottom:4px solid var(--gold);position:sticky;top:0;z-index:5}
@@ -1149,6 +1255,9 @@ public class WikiGen {
             .brand span{color:var(--gold)}
             nav a{margin-left:18px;text-decoration:none;color:#fff;font-weight:800;letter-spacing:.5px;text-transform:uppercase;font-size:14px}
             nav a:hover{color:var(--gold)}
+            nav a.lang{margin-left:22px;padding:3px 12px;border:2px solid var(--gold);border-radius:999px;color:var(--gold);text-transform:none}
+            nav a.lang:hover{background:var(--gold);color:var(--navy)}
+            html[lang=ja] h1,html[lang=ja] h2,html[lang=ja] .title,html[lang=ja] .card h2{font-family:Bangers,"Noto Sans JP",sans-serif;font-weight:900;letter-spacing:.5px}
             main{padding:24px 16px 56px}
             h1,.title{font-family:Bangers,Impact,sans-serif;font-weight:400;letter-spacing:1.5px;font-size:46px;line-height:1.05;margin:10px 0 10px;
               color:var(--ink);text-shadow:3px 3px 0 var(--gold)}
