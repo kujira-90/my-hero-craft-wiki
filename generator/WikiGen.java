@@ -100,7 +100,7 @@ public class WikiGen {
             write("characters.html", charactersPage(npcs));
             urls.add(pre + "characters.html");
             for (Npc n : npcs) {
-                write("characters/" + n.id() + ".html", charPage(n, trees));
+                write("characters/" + n.id() + ".html", charPage(n, trees, cd));
                 urls.add(pre + "characters/" + n.id() + ".html");
             }
             write("guide.html", guidePage());
@@ -497,9 +497,7 @@ public class WikiGen {
     /** 3Dで描く部品: モデル(geo)・テクスチャ・隠す骨(防具で着ていない部位)。 */
     record Part(String geo, String tex, List<String> hide) {}
 
-    record Npc(String id, String name, String group, int[] stats, List<String> quirks, int level, List<Part> parts) {
-        Npc(String id, String name, String group, int[] stats, List<String> quirks, int level) { this(id, name, group, stats, quirks, level, new ArrayList<>()); }
-    }
+    record Npc(String id, String name, String group, int[] stats, List<String> quirks, int level, List<Part> parts, List<String> skills) {}
 
     static Map<String, String> parentOf = new HashMap<>();
     static Map<String, Path> classFile = new HashMap<>();
@@ -652,17 +650,25 @@ public class WikiGen {
             if (group == null) continue;
             String name = noFormat(lang("entity.mhc." + id));
             if (name.isEmpty()) continue;
-            Matcher s = Pattern.compile("SetEntityStats\\(this\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)((?:\\s*,\\s*\"[a-z0-9_]+\")*)\\s*\\)").matcher(src);
+            // 使う技: SkillMath.setUseSkill(this,"技",true)(自分のクラスと親のクラス)
+            Set<String> skills = new LinkedHashSet<>();
+            for (String c : ancestors(cls)) {
+                if (!classFile.containsKey(c)) break;
+                Matcher us = Pattern.compile("setUseSkill\\(this\\s*,\\s*\"([a-z0-9_]+)\"\\s*,\\s*true\\s*\\)").matcher(strip(read(classFile.get(c))));
+                while (us.find()) skills.add(us.group(1));
+            }
+            List<String> sk = new ArrayList<>(skills);
+            Matcher s =Pattern.compile("SetEntityStats\\(this\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)((?:\\s*,\\s*\"[a-z0-9_]+\")*)\\s*\\)").matcher(src);
             Matcher l = Pattern.compile("SetEntityStats\\(this\\s*,\\s*\"([a-z0-9_]+)\"\\s*,\\s*(\\d+)\\s*\\)").matcher(src);
             if (s.find()) {
                 List<String> q = new ArrayList<>();
                 Matcher n = Pattern.compile("\"([a-z0-9_]+)\"").matcher(s.group(6));
                 while (n.find()) q.add(n.group(1));
-                list.add(new Npc(id, name, group, new int[]{num(s.group(1)), num(s.group(2)), num(s.group(3)), num(s.group(4)), num(s.group(5))}, q, 0, parts));
+                list.add(new Npc(id, name, group, new int[]{num(s.group(1)), num(s.group(2)), num(s.group(3)), num(s.group(4)), num(s.group(5))}, q, 0, parts, sk));
             } else if (l.find()) {
-                list.add(new Npc(id, name, group, null, List.of(l.group(1)), num(l.group(2)), parts));
+                list.add(new Npc(id, name, group, null, List.of(l.group(1)), num(l.group(2)), parts, sk));
             } else if (cls.equals("Villan_Mob")) {
-                list.add(new Npc(id, name, group, null, List.of("random"), 0, parts));
+                list.add(new Npc(id, name, group, null, List.of("random"), 0, parts, sk));
             }
         }
         list.sort(Comparator.comparing(Npc::group).thenComparing(Npc::name));
@@ -875,7 +881,7 @@ public class WikiGen {
                 "マイクラ MOD「My Hero Craft」に出てくるヒーロー・雄英生・ヴィランの一覧。"), "characters.html", b.toString(), 0);
     }
 
-    static String charPage(Npc n, Map<String, Tree> trees) {
+    static String charPage(Npc n, Map<String, Tree> trees, Cd cd) {
         String sd = side(n.group());
         StringBuilder b = new StringBuilder();
         b.append("<p class=\"crumb\"><a href=\"../characters.html\">").append(T("Characters", "キャラクター")).append("</a> / ").append(esc(group(n.group()))).append("</p>");
@@ -908,8 +914,21 @@ public class WikiGen {
         } else {
             b.append("<div class=\"panel\"><h2>").append(T("Stats", "ステータス")).append("</h2><p>").append(T("Quirk level ", "個性 Lv ")).append(n.level()).append(T(".", "")).append("</p></div>");
         }
-        return layout(label(n) + T(" (Character)", "（キャラクター）"), L.equals("ja") ? label(n) + "（マイクラ MOD「My Hero Craft」）の個性とステータス。"
-                : n.name() + " in the My Hero Craft Minecraft mod: quirk and stats.", "characters/" + n.id() + ".html", b.toString(), 1);
+        if (!n.skills().isEmpty()) {
+            b.append("<h2>").append(T("Skills used", "使う技")).append("</h2><div class=\"table\"><table><thead><tr><th>").append(T("Skill", "技")).append("</th><th>")
+                    .append(T("Description", "説明")).append("</th><th>").append(T("Attack", "攻撃力")).append("</th><th>").append(T("Cooldown (s)", "CD（秒）"))
+                    .append("</th></tr></thead><tbody>");
+            for (String s : n.skills()) {
+                String q = trees.entrySet().stream().filter(e -> e.getValue().nodes.stream().anyMatch(x -> x.id.equals(s))).map(Map.Entry::getKey).findFirst().orElse(null);
+                String note = lang("mhc.chat.message.note." + s);
+                String name = esc(skillName(s));
+                b.append("<tr><td><strong>").append(q != null ? "<a href=\"../quirks/" + q + ".html\">" + name + "</a>" : name).append("</strong></td><td>")
+                        .append(esc(plain(note))).append("</td><td>").append(esc(atk(note))).append("</td><td>").append(esc(cd.of(s))).append("</td></tr>");
+            }
+            b.append("</tbody></table></div>");
+        }
+        return layout(label(n) + T(" (Character)", "（キャラクター）"), L.equals("ja") ? label(n) + "（マイクラ MOD「My Hero Craft」）の個性・ステータス・使う技。"
+                : n.name() + " in the My Hero Craft Minecraft mod: quirk, stats and skills.", "characters/" + n.id() + ".html", b.toString(), 1);
     }
 
     /** 5つのステータスのレーダーチャート(SVG)。最大20。 */
