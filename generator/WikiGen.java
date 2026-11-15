@@ -20,6 +20,35 @@ public class WikiGen {
     /** 今の言語の文 */
     static String T(String enText, String jaText) { return L.equals("ja") ? jaText : enText; }
 
+    static int[] inheritNeed = new int[4]; // 体力・筋力・器用さ・防御
+    static List<String> inheritQuirks = new ArrayList<>();
+    static int emberUses;
+
+    /** オールマイトから継承する方法(ワン・フォー・オールとオールマイトのページ)。 */
+    static String inheritBlock() {
+        if (inheritQuirks.isEmpty()) return "";
+        StringBuilder b = new StringBuilder("<h2>").append(T("Inheriting One For All from All Might", "オールマイトから継承する")).append("</h2><p>")
+                .append(T("Right-click All Might with your main hand to become the 9th holder of One For All. You need all of these:",
+                        "オールマイトをメインの手で右クリックすると、ワン・フォー・オールの9代目になれます。次の条件が全部いります。")).append("</p><ul>")
+                .append(li("You have no quirk at all.", "個性を1つも持っていない（無個性）。"))
+                .append(li("Health " + inheritNeed[0] + "+, Strength " + inheritNeed[1] + "+, Dexterity " + inheritNeed[2] + "+, Defense " + inheritNeed[3] + "+.",
+                        "体力 " + inheritNeed[0] + " 以上・筋力 " + inheritNeed[1] + " 以上・器用さ " + inheritNeed[2] + " 以上・防御 " + inheritNeed[3] + " 以上。"))
+                .append(li("All Might still has One For All and has not passed it on yet.", "オールマイトがまだワン・フォー・オールを持っていて、誰にも渡していない。"))
+                .append("</ul><p>").append(T("You also get the quirks of past holders. Each one unlocks when your Quirk stat reaches:",
+                        "歴代の個性ももらえます。それぞれ「個性」ステータスが次の値になると使えるようになります。")).append("</p><div class=\"table\"><table><thead><tr><th>")
+                .append(T("Quirk", "個性")).append("</th><th>").append(T("Quirk stat needed", "必要な個性ステータス")).append("</th></tr></thead><tbody>");
+        int n = inheritQuirks.size();
+        for (int i = 0; i < n; i++) {
+            String q = inheritQuirks.get(i);
+            int need = (int) Math.ceil(10 + 10.0 * (i + 1) / n); // SkillMath.isOneForAllLocked と同じ式
+            b.append("<tr><td><a href=\"../quirks/").append(q).append(".html\">").append(esc(kosei(q).name())).append("</a></td><td><b>").append(need).append("</b></td></tr>");
+        }
+        b.append("</tbody></table></div><p>").append(T("After passing it on, All Might's One For All becomes embers: it can be used " + emberUses
+                        + " more times (punches don't count), then it is gone.",
+                "渡したオールマイトのワン・フォー・オールは残り火になり、あと " + emberUses + " 回（パンチは数えない）使うと消えます。")).append("</p>");
+        return b.toString();
+    }
+
     public static void main(String[] a) throws Exception {
         mod = Path.of(a[0]);
         out = Path.of(a[1]);
@@ -40,6 +69,19 @@ public class WikiGen {
         Cd cd = new Cd(strip(read(java.resolve("Math/SkillCD.java"))));
         Set<String> dispatched = dispatched(strip(read(java.resolve("Ability/KoseiSkills.java"))));
         List<Npc> npcs = npcs(java);
+        // オールマイトからワン・フォー・オールを継承する(Pro_AllMight の mobInteract)
+        Path am = java.resolve("entity/Hero/Pro/Pro_AllMight.java");
+        if (Files.exists(am)) {
+            String s = strip(read(am));
+            for (String[] k : new String[][]{{"hp", "0"}, {"pow", "1"}, {"dex", "2"}, {"def", "3"}}) {
+                Matcher n = Pattern.compile("getSkillCount\\(player,\\s*\"" + k[0] + "\"\\)\\s*<\\s*(\\d+)").matcher(s);
+                if (n.find()) inheritNeed[num(k[1])] = num(n.group(1));
+            }
+            Matcher q = Pattern.compile("for \\(String quirk : new String\\[\\]\\{([^}]*)\\}\\)").matcher(s);
+            if (q.find()) { Matcher w = Pattern.compile("\"([a-z0-9_]+)\"").matcher(q.group(1)); while (w.find()) inheritQuirks.add(w.group(1)); }
+            Matcher e = Pattern.compile("setSkillCount\\(this,\\s*\"oneforall\",\\s*(\\d+)\\)").matcher(s);
+            if (e.find()) emberUses = num(e.group(1));
+        }
 
         // 店(発目・ランチラッシュ)・アイテム(サポートアイテム・コスチューム)・スマホ
         String catalog = strip(read(java.resolve("Item/CostumeCatalog.java")));
@@ -816,6 +858,7 @@ public class WikiGen {
             for (Node c : t.root.children) if (!c.passive) treeItem(b, c, new HashSet<>());
             b.append("</ul>");
         }
+        if (q.equals("oneforall")) b.append(inheritBlock());
         List<Npc> users = npcs.stream().filter(n -> n.quirks().contains(q)).toList();
         if (!users.isEmpty()) {
             b.append("<h2>").append(T("Characters with this quirk", "この個性を持つキャラ")).append("</h2><ul class=\"inline\">");
@@ -914,6 +957,7 @@ public class WikiGen {
         } else {
             b.append("<div class=\"panel\"><h2>").append(T("Stats", "ステータス")).append("</h2><p>").append(T("Quirk level ", "個性 Lv ")).append(n.level()).append(T(".", "")).append("</p></div>");
         }
+        if (n.id().equals("pro_allmight")) b.append(inheritBlock());
         if (!n.skills().isEmpty()) {
             b.append("<h2>").append(T("Skills used", "使う技")).append("</h2><div class=\"table\"><table><thead><tr><th>").append(T("Skill", "技")).append("</th><th>")
                     .append(T("Description", "説明")).append("</th><th>").append(T("Attack", "攻撃力")).append("</th><th>").append(T("Cooldown (s)", "CD（秒）"))
